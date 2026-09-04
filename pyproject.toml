@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "base-uniswap-v3-impact"
+version = "0.1.0"
+description = "Collect and analyze Base Uniswap v3 swap price impact data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "python-dotenv>=1.0.1",
+  "web3>=6.20.0",
+  "matplotlib>=3.8.0",
+]
+
+[project.scripts]
+base-v3-discover-pool = "base_uniswap_v3_impact.discover_pool:main"
+base-v3-fetch-swaps = "base_uniswap_v3_impact.fetch_swaps:main"
+base-v3-analyze = "base_uniswap_v3_impact.analyze:main"
+base-v3-quality-check = "base_uniswap_v3_impact.quality_check:main"
+base-v3-quote = "base_uniswap_v3_impact.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
