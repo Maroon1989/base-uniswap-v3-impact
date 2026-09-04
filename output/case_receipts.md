@@ -1,0 +1,52 @@
+# Transaction Receipt Swap Inspection
+
+## 0x611bd37d...2ecfd349
+
+- Block: 50867835
+- Status: 1
+- Gas used: 303,190
+
+| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
+| ---: | --- | --- | ---: | --- | ---: | ---: |
+| 2504 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 72.60229143 | -179,740.85801200 |
+
+## 0x1a2915ed...886dbaf7
+
+- Block: 50867834
+- Status: 1
+- Gas used: 264,998
+
+| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
+| ---: | --- | --- | ---: | --- | ---: | ---: |
+| 2637 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 57.74181688 | -143,597.94067500 |
+
+## 0x27573ac3...530ed72d
+
+- Block: 50867835
+- Status: 1
+- Gas used: 1,396,321
+
+| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
+| ---: | --- | --- | ---: | --- | ---: | ---: |
+| 2563 | 0x6c561B446416E1A00E8E93E221854d6eA4171372 | WETH/USDC | 3000 | sell_WETH | 37.76775779 | -93,944.04427900 |
+| 2564 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | buy_WETH | -37.83902586 | 93,944.04427900 |
+| 2571 | 0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31 | SOL/cbBTC | 300 |  | -3.50907493 | 0.00446677 |
+| 2573 | 0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871 | JitoSOL/cbBTC | 100 |  | 2.70036735 | -0.00446745 |
+| 2579 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 0.60491969 | -1,503.04503600 |
+
+## 0xc0998372...a231a369
+
+- Block: 50867837
+- Status: 1
+- Gas used: 4,336,389
+
+| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
+| ---: | --- | --- | ---: | --- | ---: | ---: |
+| 171 | 0x6c561B446416E1A00E8E93E221854d6eA4171372 | WETH/USDC | 3000 | sell_WETH | 36.40144260 | -90,505.16419800 |
+| 172 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | buy_WETH | -36.46764196 | 90,505.16419800 |
+| 179 | 0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31 | SOL/cbBTC | 300 |  | -6.20060021 | 0.00787861 |
+| 181 | 0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871 | JitoSOL/cbBTC | 100 |  | 4.77158684 | -0.00788115 |
+| 188 | 0x7C7420DD105E2779316423Ba3E973f434315EFA9 | WETH/cbBTC | 85 |  | 7.92340905 | -0.24444876 |
+| 189 | 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef | USDC/cbBTC | 500 |  | -19,677.45426200 | 0.24444876 |
+| 196 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 8.24000034 | -20,457.35261200 |
+| 203 | 0xb4CB800910B228ED3d0834cF79D697127BBB00e5 | WETH/USDC | 100 | sell_WETH | 2.22383211 | -5,520.83881000 |

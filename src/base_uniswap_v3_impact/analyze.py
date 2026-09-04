@@ -330,7 +330,7 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
     start_dt = datetime.fromtimestamp(int(rows[0]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
     end_dt = datetime.fromtimestamp(int(rows[-1]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
     lines = [
-        "# Findings Summary",
+        "# Generated Metrics Snapshot",
         "",
         "## Dataset",
         "",
@@ -351,11 +351,11 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
         f"- Pool fee floor: {fmt_decimal(fee_bps, 3)} bps",
         f"- Mean absolute price impact: {fmt_decimal(Decimal(mean(impact_bps)), 3) if impact_bps else 'n/a'} bps",
         f"- Median absolute price impact: {fmt_decimal(median(impact_bps), 3) if impact_bps else 'n/a'} bps",
-        f"- Median fee-adjusted extra slippage: {fmt_decimal(median(extra_impact_bps), 3) if extra_impact_bps else 'n/a'} bps",
-        f"- 95th percentile fee-adjusted extra slippage: {fmt_decimal(percentile(extra_impact_bps, Decimal(95)), 3)} bps",
+        f"- Approx. median fee-adjusted extra slippage: {fmt_decimal(median(extra_impact_bps), 3) if extra_impact_bps else 'n/a'} bps",
+        f"- Approx. 95th percentile fee-adjusted extra slippage: {fmt_decimal(percentile(extra_impact_bps, Decimal(95)), 3)} bps",
         f"- Max raw absolute price impact: {fmt_decimal(max(impact_bps), 3) if impact_bps else 'n/a'} bps; raw maxima can be dust artifacts, so use a notional floor for outlier review",
         f"- Buy-WETH swaps: {len(buys):,}; sell-WETH swaps: {len(sells):,}",
-        f"- Fee-adjusted impact starts to look meaningfully elevated around size bucket: {noticeable_bucket or 'not clear in this sample'}",
+        f"- Approx. fee-adjusted impact starts to look meaningfully elevated around size bucket: {noticeable_bucket or 'not clear in this sample'}",
         f"- Liquidity relationship: {liquidity_note}",
         f"- Short-horizon reversal note: {reversal_note}",
         "",

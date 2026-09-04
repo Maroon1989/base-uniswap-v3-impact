@@ -1,4 +1,4 @@
-# Findings Summary
+# Generated Metrics Snapshot
 
 ## Dataset
 
@@ -19,11 +19,11 @@ This pool is a high-frequency venue for ETH-dollar flow on Base. Swap events exp
 - Pool fee floor: 5.000 bps
 - Mean absolute price impact: 5.803 bps
 - Median absolute price impact: 5.099 bps
-- Median fee-adjusted extra slippage: 0.099 bps
-- 95th percentile fee-adjusted extra slippage: 1.630 bps
+- Approx. median fee-adjusted extra slippage: 0.099 bps
+- Approx. 95th percentile fee-adjusted extra slippage: 1.630 bps
 - Max raw absolute price impact: 625.000 bps; raw maxima can be dust artifacts, so use a notional floor for outlier review
 - Buy-WETH swaps: 2,457; sell-WETH swaps: 2,220
-- Fee-adjusted impact starts to look meaningfully elevated around size bucket: 10k-50k
+- Approx. fee-adjusted impact starts to look meaningfully elevated around size bucket: 10k-50k
 - Liquidity relationship: For trades above the median size, low-liquidity periods had median extra slippage 0.292 bps versus 0.440 bps in high-liquidity periods (0.66x).
 - Short-horizon reversal note: Simple any-opposite-swap checks are too noisy in this high-frequency pool. Run base-v3-advanced-insights for material opposite-flow, recovery, and notional-filtered outlier metrics.
 

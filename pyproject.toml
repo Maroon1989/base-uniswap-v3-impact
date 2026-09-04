@@ -20,6 +20,7 @@ base-v3-fetch-swaps = "base_uniswap_v3_impact.fetch_swaps:main"
 base-v3-analyze = "base_uniswap_v3_impact.analyze:main"
 base-v3-advanced-insights = "base_uniswap_v3_impact.advanced_insights:main"
 base-v3-quality-check = "base_uniswap_v3_impact.quality_check:main"
+base-v3-inspect-tx = "base_uniswap_v3_impact.inspect_tx:main"
 base-v3-quote = "base_uniswap_v3_impact.cli:main"
 
 [tool.setuptools.packages.find]

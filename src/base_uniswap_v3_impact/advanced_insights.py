@@ -9,641 +9,400 @@ from pathlib import Path
 from statistics import median
 from typing import Iterable
 
-from .analyze import (
-    PoolTokens,
-    enrich_swaps,
-    load_swap_rows,
-    percentile,
-    pool_tokens_from_row,
-)
+from .analyze import enrich_swaps, load_swap_rows, percentile, pool_tokens_from_row
 from .config import DEFAULT_DB_PATH
 from .db import connect, load_pool_row
 
 getcontext().prec = 80
 
-BPS_PER_PERCENT = Decimal("100")
-BPS_PER_UNIT = Decimal("10000")
+BPS = Decimal("10000")
 ZERO = Decimal(0)
-
-BUCKET_ORDER = [
-    "<1k",
-    "1k-10k",
-    "10k-50k",
-    "50k-100k",
-    "100k-250k",
-    "250k-500k",
-    "500k-1m",
-    ">=1m",
-]
+SIZE_BUCKETS = ["<1k", "1k-10k", "10k-50k", "50k-100k", "100k-250k", "250k-500k", "500k-1m", ">=1m"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Generate fee-adjusted and flow-based insights from collected Base Uniswap v3 swaps."
-    )
+    parser = argparse.ArgumentParser(description="Write deeper fee-adjusted metrics and case candidates.")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
     parser.add_argument("--pool")
     parser.add_argument("--base-symbol", default="WETH")
     parser.add_argument("--quote-symbol", default="USDC")
     parser.add_argument("--output", default="output/advanced_insights.md")
-    parser.add_argument("--opposite-window-seconds", type=int, default=300)
-    parser.add_argument("--recovery-window-seconds", type=int, default=600)
     parser.add_argument("--economic-min-size-usd", type=Decimal, default=Decimal("1000"))
+    parser.add_argument("--large-min-size-usd", type=Decimal, default=Decimal("50000"))
+    parser.add_argument("--large-min-extra-bps", type=Decimal, default=Decimal("10"))
+    parser.add_argument("--backrun-blocks", type=int, default=2)
     return parser
 
 
-def d(value: object) -> Decimal:
-    if isinstance(value, Decimal):
-        return value
-    return Decimal(str(value))
+def dec(value: object) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
-def pct(part: Decimal, total: Decimal, digits: int = 1) -> str:
-    if total == 0:
-        return "n/a"
-    return f"{(part / total * Decimal(100)):.{digits}f}%"
-
-
-def bps(value: Decimal | None, digits: int = 3) -> str:
-    return "n/a" if value is None else f"{value:,.{digits}f}"
-
-
-def usd(value: Decimal | None, digits: int = 2) -> str:
-    return "n/a" if value is None else f"${value:,.{digits}f}"
-
-
-def usd_precise(value: Decimal | None) -> str:
+def money(value: Decimal | None, digits: int = 2) -> str:
     if value is None:
         return "n/a"
     if abs(value) < Decimal("1"):
         return f"${value:,.8f}"
-    return usd(value)
+    return f"${value:,.{digits}f}"
 
 
-def short_tx(tx_hash: str) -> str:
-    return f"{tx_hash[:8]}...{tx_hash[-6:]}"
+def num(value: Decimal | None, digits: int = 3) -> str:
+    return "n/a" if value is None else f"{value:,.{digits}f}"
 
 
-def row_key(row: dict[str, object]) -> tuple[str, int]:
-    return str(row["tx_hash"]), int(row["log_index"])
+def pct(part: Decimal, total: Decimal, digits: int = 1) -> str:
+    return "n/a" if total == 0 else f"{part / total * Decimal(100):.{digits}f}%"
 
 
-def pool_fee_bps(pool: PoolTokens) -> Decimal:
-    return Decimal(pool.fee) / Decimal(100)
+def md_row(cells: Iterable[object]) -> str:
+    return "| " + " | ".join(str(cell) for cell in cells) + " |"
 
 
-def valid_impact_rows(rows: Iterable[dict[str, object]], pool: PoolTokens) -> list[dict[str, object]]:
-    fee = pool_fee_bps(pool)
-    valid: list[dict[str, object]] = []
+def tx_link(tx_hash: str) -> str:
+    short = f"{tx_hash[:8]}...{tx_hash[-6:]}"
+    return f"[{short}](https://basescan.org/tx/{tx_hash})"
+
+
+def ts(row: dict[str, object]) -> str:
+    return datetime.fromtimestamp(int(row["block_timestamp"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def add_fee_adjusted_metrics(rows: list[dict[str, object]], pool_fee: int) -> list[dict[str, object]]:
+    fee_rate = Decimal(pool_fee) / Decimal(1_000_000)
+    out: list[dict[str, object]] = []
     for row in rows:
-        if row["abs_price_impact_pct"] is None:
+        if row["pre_price_usdc_per_weth"] is None:
             continue
-        abs_impact_bps = d(row["abs_price_impact_pct"]) * BPS_PER_PERCENT
-        extra_impact_bps = max(abs_impact_bps - fee, ZERO)
-        size_usd = d(row["size_usd"])
+        pre = dec(row["pre_price_usdc_per_weth"])
+        execution = dec(row["execution_price_usdc_per_weth"])
+        base_amount = dec(row["base_amount"])
+        quote_amount = dec(row["quote_amount"])
+        raw_signed_bps = (execution - pre) / pre * BPS
+        if row["direction"] == "buy_base":
+            fee_only_price = pre / (Decimal(1) - fee_rate)
+            fee_only_quote = base_amount * fee_only_price
+            extra_cost = max(quote_amount - fee_only_quote, ZERO)
+        else:
+            fee_only_price = pre * (Decimal(1) - fee_rate)
+            fee_only_quote = base_amount * fee_only_price
+            extra_cost = max(fee_only_quote - quote_amount, ZERO)
+
         enriched = dict(row)
-        enriched["abs_impact_bps"] = abs_impact_bps
-        enriched["extra_impact_bps"] = extra_impact_bps
-        enriched["fee_cost_usd"] = size_usd * fee / BPS_PER_UNIT
-        enriched["extra_slippage_cost_usd"] = size_usd * extra_impact_bps / BPS_PER_UNIT
+        enriched["raw_signed_impact_bps"] = raw_signed_bps
+        enriched["raw_abs_impact_bps"] = abs(raw_signed_bps)
+        enriched["fee_only_execution_price"] = fee_only_price
+        enriched["fee_floor_bps"] = abs((fee_only_price - pre) / pre * BPS)
+        enriched["extra_slippage_usd"] = extra_cost
+        enriched["extra_slippage_bps"] = extra_cost / quote_amount * BPS if quote_amount else ZERO
+        enriched["fee_floor_cost_usd"] = abs(fee_only_quote - base_amount * pre)
         if row["post_price_change_pct"] is not None:
-            enriched["post_price_change_bps"] = d(row["post_price_change_pct"]) * BPS_PER_PERCENT
+            enriched["post_price_change_bps"] = dec(row["post_price_change_pct"]) * Decimal(100)
         else:
             enriched["post_price_change_bps"] = None
-        valid.append(enriched)
-    return valid
+        out.append(enriched)
+    return out
 
 
-def sum_decimal(rows: Iterable[dict[str, object]], key: str) -> Decimal:
-    total = ZERO
-    for row in rows:
-        total += d(row[key])
-    return total
+def total(rows: Iterable[dict[str, object]], key: str) -> Decimal:
+    return sum((dec(row[key]) for row in rows), ZERO)
 
 
-def first_threshold_bucket(rows: list[dict[str, object]]) -> str:
-    for bucket in BUCKET_ORDER:
-        subset = [d(row["extra_impact_bps"]) for row in rows if row["size_bucket"] == bucket]
-        if not subset:
-            continue
-        med = median(subset)
-        p75 = percentile(subset, Decimal(75))
-        if med >= Decimal("1") or (p75 is not None and p75 >= Decimal("2")):
-            return bucket
-    return "not visible in this sample"
+def top_pct(rows: list[dict[str, object]], pct_value: int) -> list[dict[str, object]]:
+    count = max(1, math.ceil(len(rows) * pct_value / 100))
+    return sorted(rows, key=lambda row: dec(row["size_usd"]), reverse=True)[:count]
 
 
-def top_share(rows: list[dict[str, object]], pct_value: Decimal) -> dict[str, Decimal | int]:
-    count = max(1, math.ceil(len(rows) * float(pct_value) / 100))
-    top = sorted(rows, key=lambda row: d(row["size_usd"]), reverse=True)[:count]
-    return {
-        "count": count,
-        "volume": sum_decimal(top, "size_usd"),
-        "fee_cost": sum_decimal(top, "fee_cost_usd"),
-        "extra_cost": sum_decimal(top, "extra_slippage_cost_usd"),
-    }
-
-
-def direction_lines(rows: list[dict[str, object]], total_volume: Decimal) -> list[str]:
-    lines = []
-    for direction in ("buy_base", "sell_base"):
-        subset = [row for row in rows if row["direction"] == direction]
-        if not subset:
-            continue
-        sizes = [d(row["size_usd"]) for row in subset]
-        extra = [d(row["extra_impact_bps"]) for row in subset]
-        p95 = percentile(extra, Decimal(95))
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    direction,
-                    f"{len(subset):,}",
-                    usd(sum(sizes, ZERO)),
-                    pct(sum(sizes, ZERO), total_volume),
-                    usd(median(sizes)),
-                    bps(median(extra)),
-                    bps(p95),
-                ]
-            )
-            + " |"
-        )
-    return lines
-
-
-def bucket_lines(rows: list[dict[str, object]], total_volume: Decimal) -> list[str]:
-    lines = []
-    for bucket in BUCKET_ORDER:
+def size_bucket_table(rows: list[dict[str, object]]) -> list[str]:
+    volume = total(rows, "size_usd")
+    lines = [
+        md_row(["Size bucket", "Swaps", "Volume", "Volume share", "Median raw bps", "Median extra bps", "P95 extra bps"]),
+        md_row(["---", "---:", "---:", "---:", "---:", "---:", "---:"]),
+    ]
+    for bucket in SIZE_BUCKETS:
         subset = [row for row in rows if row["size_bucket"] == bucket]
         if not subset:
             continue
-        abs_impacts = [d(row["abs_impact_bps"]) for row in subset]
-        extra = [d(row["extra_impact_bps"]) for row in subset]
-        volume = sum_decimal(subset, "size_usd")
-        p75 = percentile(extra, Decimal(75))
-        p95 = percentile(extra, Decimal(95))
+        extra = [dec(row["extra_slippage_bps"]) for row in subset]
+        raw = [dec(row["raw_abs_impact_bps"]) for row in subset]
         lines.append(
-            "| "
-            + " | ".join(
+            md_row(
                 [
                     bucket,
                     f"{len(subset):,}",
-                    usd(volume),
-                    pct(volume, total_volume),
-                    bps(median(abs_impacts)),
-                    bps(median(extra)),
-                    bps(p75),
-                    bps(p95),
+                    money(total(subset, "size_usd")),
+                    pct(total(subset, "size_usd"), volume),
+                    num(median(raw)),
+                    num(median(extra)),
+                    num(percentile(extra, Decimal(95))),
                 ]
             )
-            + " |"
         )
     return lines
 
 
-def hourly_lines(rows: list[dict[str, object]]) -> tuple[list[str], dict[str, object] | None]:
-    grouped: dict[datetime, list[dict[str, object]]] = defaultdict(list)
+def concentration_table(rows: list[dict[str, object]]) -> list[str]:
+    volume = total(rows, "size_usd")
+    cost = total(rows, "extra_slippage_usd")
+    lines = [
+        md_row(["Segment", "Swaps", "Volume share", "Extra-slippage cost share", "Extra-slippage cost"]),
+        md_row(["---", "---:", "---:", "---:", "---:"]),
+    ]
+    for p in (1, 5, 10):
+        subset = top_pct(rows, p)
+        lines.append(md_row([f"Top {p}%", f"{len(subset):,}", pct(total(subset, "size_usd"), volume), pct(total(subset, "extra_slippage_usd"), cost), money(total(subset, "extra_slippage_usd"))]))
+    return lines
+
+
+def period_stats(rows: list[dict[str, object]], seconds: int) -> list[dict[str, object]]:
+    groups: dict[int, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        hour = datetime.fromtimestamp(int(row["block_timestamp"]), tz=timezone.utc).replace(
-            minute=0, second=0, microsecond=0
+        bucket = int(row["block_timestamp"]) // seconds * seconds
+        groups[bucket].append(row)
+    stats = []
+    for bucket, subset in groups.items():
+        buy = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "buy_base"), ZERO)
+        sell = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "sell_base"), ZERO)
+        start_price = dec(subset[0]["pre_price_usdc_per_weth"] or subset[0]["post_price_usdc_per_weth"])
+        end_price = dec(subset[-1]["post_price_usdc_per_weth"])
+        stats.append(
+            {
+                "start": bucket,
+                "swaps": len(subset),
+                "volume": buy + sell,
+                "buy_volume": buy,
+                "sell_volume": sell,
+                "net_buy": buy - sell,
+                "price_move_bps": (end_price - start_price) / start_price * BPS,
+                "extra_cost": total(subset, "extra_slippage_usd"),
+            }
         )
-        grouped[hour].append(row)
+    return stats
 
-    lines = []
-    strongest: dict[str, object] | None = None
-    for hour in sorted(grouped):
-        subset = grouped[hour]
-        volume = sum_decimal(subset, "size_usd")
-        buy_volume = sum_decimal((row for row in subset if row["direction"] == "buy_base"), "size_usd")
-        sell_volume = sum_decimal((row for row in subset if row["direction"] == "sell_base"), "size_usd")
-        net_buy_volume = buy_volume - sell_volume
-        start_price = d(subset[0]["post_price_usdc_per_weth"])
-        end_price = d(subset[-1]["post_price_usdc_per_weth"])
-        price_change_bps = (end_price - start_price) / start_price * BPS_PER_UNIT if start_price else ZERO
-        extra = [d(row["extra_impact_bps"]) for row in subset]
-        row_info = {
-            "hour": hour,
-            "swaps": len(subset),
-            "volume": volume,
-            "net_buy_volume": net_buy_volume,
-            "price_change_bps": price_change_bps,
-            "median_extra": median(extra),
-        }
-        if strongest is None or abs(price_change_bps) > abs(d(str(strongest["price_change_bps"]))):
-            strongest = row_info
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    hour.strftime("%Y-%m-%d %H:00"),
-                    f"{len(subset):,}",
-                    usd(volume),
-                    usd(net_buy_volume),
-                    bps(price_change_bps),
-                    bps(median(extra)),
-                ]
-            )
-            + " |"
+
+def minute_table(rows: list[dict[str, object]], limit: int = 8) -> list[str]:
+    lines = [
+        md_row(["UTC minute", "Swaps", "Volume", "Net buy-WETH", "Price move bps", "Extra cost"]),
+        md_row(["---", "---:", "---:", "---:", "---:", "---:"]),
+    ]
+    for stat in sorted(period_stats(rows, 60), key=lambda item: dec(item["volume"]), reverse=True)[:limit]:
+        dt = datetime.fromtimestamp(int(stat["start"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        lines.append(md_row([dt, f"{stat['swaps']:,}", money(dec(stat["volume"])), money(dec(stat["net_buy"])), num(dec(stat["price_move_bps"])), money(dec(stat["extra_cost"]))]))
+    return lines
+
+
+def block_table(rows: list[dict[str, object]], limit: int = 10) -> list[str]:
+    by_block: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        by_block[int(row["block_number"])].append(row)
+    stats = []
+    for block, subset in by_block.items():
+        buy = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "buy_base"), ZERO)
+        sell = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "sell_base"), ZERO)
+        start_price = dec(subset[0]["pre_price_usdc_per_weth"] or subset[0]["post_price_usdc_per_weth"])
+        end_price = dec(subset[-1]["post_price_usdc_per_weth"])
+        stats.append((buy + sell, block, subset, buy, sell, (end_price - start_price) / start_price * BPS))
+    lines = [
+        md_row(["Block", "UTC time", "Swaps", "Volume", "Net buy-WETH", "Price move bps"]),
+        md_row(["---:", "---", "---:", "---:", "---:", "---:"]),
+    ]
+    for volume, block, subset, buy, sell, move in sorted(stats, reverse=True)[:limit]:
+        lines.append(md_row([block, ts(subset[0]), f"{len(subset):,}", money(volume), money(buy - sell), num(move)]))
+    return lines
+
+
+def economic_outlier_table(rows: list[dict[str, object]], min_size: Decimal, limit: int = 8) -> list[str]:
+    candidates = [row for row in rows if dec(row["size_usd"]) >= min_size]
+    top = sorted(candidates, key=lambda row: dec(row["extra_slippage_usd"]), reverse=True)[:limit]
+    lines = [
+        md_row(["UTC time", "Block", "Direction", "Size", "Extra bps", "Extra cost", "Tx"]),
+        md_row(["---", "---:", "---", "---:", "---:", "---:", "---"]),
+    ]
+    for row in top:
+        lines.append(md_row([ts(row), row["block_number"], row["direction"], money(dec(row["size_usd"])), num(dec(row["extra_slippage_bps"])), money(dec(row["extra_slippage_usd"])), tx_link(str(row["tx_hash"]))]))
+    return lines
+
+
+def same_tx_round_trips(rows: list[dict[str, object]], min_volume: Decimal = Decimal("1000")) -> list[dict[str, object]]:
+    by_tx: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        by_tx[str(row["tx_hash"])].append(row)
+    candidates = []
+    for tx_hash, subset in by_tx.items():
+        if len(subset) < 2 or {row["direction"] for row in subset} == {subset[0]["direction"]}:
+            continue
+        buy = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "buy_base"), ZERO)
+        sell = sum((dec(row["size_usd"]) for row in subset if row["direction"] == "sell_base"), ZERO)
+        gross = buy + sell
+        if gross < min_volume:
+            continue
+        candidates.append(
+            {
+                "tx_hash": tx_hash,
+                "time": ts(subset[0]),
+                "block": subset[0]["block_number"],
+                "logs": len(subset),
+                "gross": gross,
+                "buy": buy,
+                "sell": sell,
+                "net_buy": buy - sell,
+                "extra_cost": total(subset, "extra_slippage_usd"),
+                "directions": ",".join(str(row["direction"]) for row in subset),
+            }
         )
-    return lines, strongest
+    return sorted(candidates, key=lambda row: dec(row["gross"]), reverse=True)
 
 
-def flow_follow_through(
-    rows: list[dict[str, object]], anchor_rows: list[dict[str, object]], window_seconds: int
-) -> dict[str, object]:
-    anchor_keys = {row_key(row) for row in anchor_rows}
-    ratios: list[Decimal] = []
-    first_opposite_seconds: list[int] = []
-    material_25 = 0
-    material_50 = 0
-    material_100 = 0
-    any_opposite = 0
+def round_trip_table(rows: list[dict[str, object]], limit: int = 8) -> list[str]:
+    lines = [
+        md_row(["UTC time", "Block", "Logs", "Gross target-pool volume", "Buy vol", "Sell vol", "Net buy", "Extra cost", "Tx"]),
+        md_row(["---", "---:", "---:", "---:", "---:", "---:", "---:", "---:", "---"]),
+    ]
+    for row in same_tx_round_trips(rows)[:limit]:
+        lines.append(md_row([row["time"], row["block"], row["logs"], money(dec(row["gross"])), money(dec(row["buy"])), money(dec(row["sell"])), money(dec(row["net_buy"])), money(dec(row["extra_cost"])), tx_link(str(row["tx_hash"]))]))
+    return lines
 
+
+def backrun_candidates(rows: list[dict[str, object]], min_size: Decimal, min_extra_bps: Decimal, max_blocks: int) -> list[dict[str, object]]:
+    candidates = []
     for idx, row in enumerate(rows):
-        if row_key(row) not in anchor_keys:
+        if dec(row["size_usd"]) < min_size or dec(row["extra_slippage_bps"]) < min_extra_bps:
             continue
-        anchor_ts = int(row["block_timestamp"])
-        anchor_direction = row["direction"]
-        anchor_size = d(row["size_usd"])
-        opposite_volume = ZERO
-        first_opposite: int | None = None
+        pre = dec(row["pre_price_usdc_per_weth"])
+        post = dec(row["post_price_usdc_per_weth"])
+        gap = abs(post - pre)
+        if gap == 0:
+            continue
+        follow = []
         for nxt in rows[idx + 1 :]:
-            elapsed = int(nxt["block_timestamp"]) - anchor_ts
-            if elapsed > window_seconds:
+            if int(nxt["block_number"]) > int(row["block_number"]) + max_blocks:
                 break
-            if nxt["direction"] != anchor_direction:
-                opposite_volume += d(nxt["size_usd"])
-                if first_opposite is None:
-                    first_opposite = elapsed
-        ratio = opposite_volume / anchor_size if anchor_size else ZERO
-        ratios.append(ratio)
-        if first_opposite is not None:
-            any_opposite += 1
-            first_opposite_seconds.append(first_opposite)
-        if ratio >= Decimal("0.25"):
-            material_25 += 1
-        if ratio >= Decimal("0.50"):
-            material_50 += 1
-        if ratio >= Decimal("1.00"):
-            material_100 += 1
-
-    total = len(anchor_rows)
-    return {
-        "anchors": total,
-        "any_opposite": any_opposite,
-        "material_25": material_25,
-        "material_50": material_50,
-        "material_100": material_100,
-        "median_ratio": median(ratios) if ratios else None,
-        "median_first_opposite_seconds": median(first_opposite_seconds) if first_opposite_seconds else None,
-    }
-
-
-def recovery_stats(
-    rows: list[dict[str, object]], anchor_rows: list[dict[str, object]], window_seconds: int
-) -> dict[str, object]:
-    anchor_keys = {row_key(row) for row in anchor_rows}
-    recovered_seconds: list[int] = []
-    evaluated = 0
-    for idx, row in enumerate(rows):
-        if row_key(row) not in anchor_keys:
-            continue
-        if row["pre_price_usdc_per_weth"] is None:
-            continue
-        pre_price = d(row["pre_price_usdc_per_weth"])
-        post_price = d(row["post_price_usdc_per_weth"])
-        initial_gap = abs(post_price - pre_price)
-        if initial_gap == 0:
-            continue
-        evaluated += 1
-        target_gap = initial_gap * Decimal("0.25")
-        anchor_ts = int(row["block_timestamp"])
-        for nxt in rows[idx + 1 :]:
-            elapsed = int(nxt["block_timestamp"]) - anchor_ts
-            if elapsed > window_seconds:
-                break
-            future_gap = abs(d(nxt["post_price_usdc_per_weth"]) - pre_price)
-            if future_gap <= target_gap:
-                recovered_seconds.append(elapsed)
-                break
-    return {
-        "evaluated": evaluated,
-        "recovered": len(recovered_seconds),
-        "median_seconds": median(recovered_seconds) if recovered_seconds else None,
-    }
-
-
-def concentration_lines(rows: list[dict[str, object]], total_volume: Decimal, total_extra_cost: Decimal) -> list[str]:
-    lines = []
-    for pct_value in (Decimal(1), Decimal(5), Decimal(10)):
-        stats = top_share(rows, pct_value)
-        volume = d(stats["volume"])
-        extra_cost = d(stats["extra_cost"])
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    f"Top {pct_value:.0f}%",
-                    f"{int(stats['count']):,}",
-                    usd(volume),
-                    pct(volume, total_volume),
-                    usd(extra_cost),
-                    pct(extra_cost, total_extra_cost),
-                ]
+            if nxt["direction"] != row["direction"]:
+                recovery = max(ZERO, (gap - abs(dec(nxt["post_price_usdc_per_weth"]) - pre)) / gap)
+                follow.append((nxt, recovery))
+        opposite_volume = sum((dec(nxt["size_usd"]) for nxt, _ in follow), ZERO)
+        best_recovery = max((recovery for _, recovery in follow), default=ZERO)
+        if opposite_volume >= dec(row["size_usd"]) * Decimal("0.25") and best_recovery >= Decimal("0.50"):
+            best = max(follow, key=lambda pair: pair[1])[0]
+            candidates.append(
+                {
+                    "anchor": row,
+                    "opposite_volume": opposite_volume,
+                    "best_recovery": best_recovery,
+                    "best": best,
+                }
             )
-            + " |"
-        )
+    return sorted(candidates, key=lambda item: dec(item["anchor"]["extra_slippage_usd"]), reverse=True)
+
+
+def backrun_table(rows: list[dict[str, object]], min_size: Decimal, min_extra_bps: Decimal, max_blocks: int, limit: int = 8) -> list[str]:
+    lines = [
+        md_row(["Anchor time", "Direction", "Size", "Extra bps", "Extra cost", "Opposite vol <=2 blocks", "Best recovery", "Anchor tx"]),
+        md_row(["---", "---", "---:", "---:", "---:", "---:", "---:", "---"]),
+    ]
+    for item in backrun_candidates(rows, min_size, min_extra_bps, max_blocks)[:limit]:
+        anchor = item["anchor"]
+        lines.append(md_row([ts(anchor), anchor["direction"], money(dec(anchor["size_usd"])), num(dec(anchor["extra_slippage_bps"])), money(dec(anchor["extra_slippage_usd"])), money(dec(item["opposite_volume"])), pct(dec(item["best_recovery"]), Decimal(1)), tx_link(str(anchor["tx_hash"]))]))
     return lines
 
 
-def outlier_lines(rows: list[dict[str, object]], min_size_usd: Decimal, limit: int = 8) -> list[str]:
-    candidates = [row for row in rows if d(row["size_usd"]) >= min_size_usd]
-    top_rows = sorted(candidates, key=lambda row: (d(row["extra_impact_bps"]), d(row["size_usd"])), reverse=True)[:limit]
-    lines = []
-    for row in top_rows:
-        time_label = datetime.fromtimestamp(int(row["block_timestamp"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        tx_hash = str(row["tx_hash"])
-        post_move = row["post_price_change_bps"]
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    time_label,
-                    str(row["direction"]),
-                    usd(d(row["size_usd"])),
-                    bps(d(row["extra_impact_bps"])),
-                    bps(d(row["abs_impact_bps"])),
-                    bps(d(post_move) if post_move is not None else None),
-                    f"[{short_tx(tx_hash)}](https://basescan.org/tx/{tx_hash})",
-                ]
-            )
-            + " |"
-        )
-    return lines
-
-
-def cost_outlier_lines(rows: list[dict[str, object]], min_size_usd: Decimal, limit: int = 8) -> list[str]:
-    candidates = [row for row in rows if d(row["size_usd"]) >= min_size_usd]
-    top_rows = sorted(candidates, key=lambda row: d(row["extra_slippage_cost_usd"]), reverse=True)[:limit]
-    lines = []
-    for row in top_rows:
-        time_label = datetime.fromtimestamp(int(row["block_timestamp"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        tx_hash = str(row["tx_hash"])
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    time_label,
-                    str(row["direction"]),
-                    usd(d(row["size_usd"])),
-                    bps(d(row["extra_impact_bps"])),
-                    usd(d(row["extra_slippage_cost_usd"])),
-                    f"[{short_tx(tx_hash)}](https://basescan.org/tx/{tx_hash})",
-                ]
-            )
-            + " |"
-        )
-    return lines
-
-
-def flow_line(label: str, stats: dict[str, object]) -> str:
-    anchors = Decimal(int(stats["anchors"]))
-    median_ratio = stats["median_ratio"]
-    median_seconds = stats["median_first_opposite_seconds"]
-    return (
-        "| "
-        + " | ".join(
-            [
-                label,
-                f"{int(stats['anchors']):,}",
-                pct(Decimal(int(stats["any_opposite"])), anchors),
-                pct(Decimal(int(stats["material_25"])), anchors),
-                pct(Decimal(int(stats["material_50"])), anchors),
-                pct(Decimal(int(stats["material_100"])), anchors),
-                f"{median_ratio:.2f}x" if isinstance(median_ratio, Decimal) else "n/a",
-                f"{median_seconds:.0f}" if isinstance(median_seconds, (int, float)) else "n/a",
-            ]
-        )
-        + " |"
-    )
-
-
-def write_advanced_insights(
-    path: str | Path,
-    pool: PoolTokens,
-    rows: list[dict[str, object]],
-    impact_rows: list[dict[str, object]],
-    opposite_window_seconds: int,
-    recovery_window_seconds: int,
-    economic_min_size_usd: Decimal,
-) -> None:
-    if not rows or not impact_rows:
-        raise SystemExit("Need analyzable swaps with pre-swap impact to write advanced insights.")
-
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    fee = pool_fee_bps(pool)
-    total_volume = sum_decimal(impact_rows, "size_usd")
-    total_fee_cost = sum_decimal(impact_rows, "fee_cost_usd")
-    total_extra_cost = sum_decimal(impact_rows, "extra_slippage_cost_usd")
-    sizes = [d(row["size_usd"]) for row in impact_rows]
-    extra = [d(row["extra_impact_bps"]) for row in impact_rows]
-    abs_impacts = [d(row["abs_impact_bps"]) for row in impact_rows]
-    threshold_bucket = first_threshold_bucket(impact_rows)
-    economic_rows = [row for row in impact_rows if d(row["size_usd"]) >= economic_min_size_usd]
-    max_raw_impact = max(impact_rows, key=lambda row: d(row["extra_impact_bps"]))
-    p90_size = percentile(sizes, Decimal(90))
-    top_decile = [row for row in impact_rows if p90_size is not None and d(row["size_usd"]) >= p90_size]
-    lower_90 = [row for row in impact_rows if p90_size is not None and d(row["size_usd"]) < p90_size]
-    top_flow = flow_follow_through(impact_rows, top_decile, opposite_window_seconds)
-    lower_flow = flow_follow_through(impact_rows, lower_90, opposite_window_seconds)
-    top_recovery = recovery_stats(impact_rows, top_decile, recovery_window_seconds)
-    hourly, strongest_hour = hourly_lines(impact_rows)
-    start_dt = datetime.fromtimestamp(int(rows[0]["block_timestamp"]), tz=timezone.utc)
-    end_dt = datetime.fromtimestamp(int(rows[-1]["block_timestamp"]), tz=timezone.utc)
-    start_price = d(rows[0]["post_price_usdc_per_weth"])
-    end_price = d(rows[-1]["post_price_usdc_per_weth"])
-    price_drift_bps = (end_price - start_price) / start_price * BPS_PER_UNIT if start_price else ZERO
-    buy_volume = sum_decimal((row for row in impact_rows if row["direction"] == "buy_base"), "size_usd")
-    sell_volume = sum_decimal((row for row in impact_rows if row["direction"] == "sell_base"), "size_usd")
-    net_buy_volume = buy_volume - sell_volume
-    extra_cost_top10 = top_share(impact_rows, Decimal(10))
-    p95_extra = percentile(extra, Decimal(95))
-
-    material_top = Decimal(int(top_flow["material_50"]))
-    material_lower = Decimal(int(lower_flow["material_50"]))
-    top_anchors = Decimal(int(top_flow["anchors"]))
-    lower_anchors = Decimal(int(lower_flow["anchors"]))
-    top_material_pct = pct(material_top, top_anchors)
-    lower_material_pct = pct(material_lower, lower_anchors)
-    recovery_rate = pct(Decimal(int(top_recovery["recovered"])), Decimal(int(top_recovery["evaluated"])))
-
-    strongest_hour_text = "n/a"
-    strongest_hour_volume_share = "n/a"
-    if strongest_hour is not None:
-        strongest_hour_volume_share = pct(d(str(strongest_hour["volume"])), total_volume)
-        strongest_hour_text = (
-            f"{strongest_hour['hour'].strftime('%Y-%m-%d %H:00 UTC')} "
-            f"({bps(d(str(strongest_hour['price_change_bps'])))} bps price move, "
-            f"{usd(d(str(strongest_hour['volume'])))} volume)"
-        )
-
-    if material_top <= material_lower:
-        opposite_interpretation = (
-            f"- A simple opposite-flow rule is not discriminative in this pool: {top_material_pct} of top-decile "
-            f"swaps had opposite-direction volume of at least 50% within {opposite_window_seconds // 60} minutes, "
-            f"but the lower 90% was also {lower_material_pct}. That means reversal counts should be treated as "
-            "background activity unless combined with a notional floor and recovery behavior."
-        )
-    else:
-        opposite_interpretation = (
-            f"- Material opposite flow is elevated for large swaps: {top_material_pct} of top-decile swaps had "
-            f"opposite-direction volume of at least 50% within {opposite_window_seconds // 60} minutes, versus "
-            f"{lower_material_pct} for the rest."
-        )
+def write_report(path: str | Path, pool, rows: list[dict[str, object]], args: argparse.Namespace) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    volume = total(rows, "size_usd")
+    extra_cost = total(rows, "extra_slippage_usd")
+    fee_cost = total(rows, "fee_floor_cost_usd")
+    extra_bps = [dec(row["extra_slippage_bps"]) for row in rows]
+    raw_bps = [dec(row["raw_abs_impact_bps"]) for row in rows]
+    max_raw = max(rows, key=lambda row: dec(row["raw_abs_impact_bps"]))
+    start = datetime.fromtimestamp(int(rows[0]["block_timestamp"]), tz=timezone.utc).isoformat()
+    end = datetime.fromtimestamp(int(rows[-1]["block_timestamp"]), tz=timezone.utc).isoformat()
+    first_price = dec(rows[0]["pre_price_usdc_per_weth"] or rows[0]["post_price_usdc_per_weth"])
+    last_price = dec(rows[-1]["post_price_usdc_per_weth"])
+    price_move_bps = (last_price - first_price) / first_price * BPS
+    top10 = top_pct(rows, 10)
+    round_trips = same_tx_round_trips(rows)
+    backruns = backrun_candidates(rows, args.large_min_size_usd, args.large_min_extra_bps, args.backrun_blocks)
 
     lines = [
-        "# Advanced Findings",
+        "# Advanced Research Notes",
         "",
-        "## Dataset",
+        "## Metric Definition",
         "",
-        f"- Pool: `{pool.pool_address}` ({pool.token0.symbol}/{pool.token1.symbol}, fee tier {pool.fee})",
-        f"- Window: {start_dt.isoformat()} to {end_dt.isoformat()}",
-        f"- Swaps with fee-adjusted impact: {len(impact_rows):,}",
-        f"- Total quote-side volume: {usd(total_volume)}",
+        "This report uses realized execution deviation, not wallet UI slippage tolerance. For each Swap, `execution_price = abs(USDC_delta / WETH_delta)`. The pre-swap pool price is approximated with the previous Swap event's post-swap price.",
         "",
-        "## Executive Findings",
+        "The 0.05% pool fee is removed before calling a trade expensive. For a buy-WETH swap, the fee-only reference price is `pre_price / (1 - fee_rate)`. For a sell-WETH swap, it is `pre_price * (1 - fee_rate)`. Extra slippage cost is the USDC difference between the realized quote amount and that fee-only reference.",
         "",
-        (
-            f"- The headline median absolute impact of {bps(median(abs_impacts))} bps is mostly the "
-            f"{bps(fee)} bps pool fee. After subtracting that fee floor, median extra slippage is "
-            f"{bps(median(extra))} bps and p95 extra slippage is {bps(p95_extra)} bps."
-        ),
-        (
-            f"- The first size bucket where fee-adjusted impact becomes clearly visible is `{threshold_bucket}`. "
-            "Below that level, most swaps are paying the pool fee rather than moving the curve very much."
-        ),
-        (
-            f"- Flow is concentrated: the largest 10% of swaps contributed "
-            f"{pct(d(extra_cost_top10['volume']), total_volume)} of volume and "
-            f"{pct(d(extra_cost_top10['extra_cost']), total_extra_cost)} of estimated extra slippage cost."
-        ),
-        (
-            f"- Tail economics matter more than tail percentages. Estimated extra slippage beyond the fee floor "
-            f"was {usd(total_extra_cost)}, higher than the estimated pool-fee cost of {usd(total_fee_cost)}, "
-            "even though the median extra slippage was close to zero."
-        ),
-        (
-            f"- The pool price moved {bps(price_drift_bps)} bps over the four-hour sample, while median "
-            f"extra single-swap slippage was {bps(median(extra))} bps. For most trades, market drift was "
-            "a larger risk than immediate curve impact."
-        ),
-        (
-            f"- The strongest hourly regime was {strongest_hour_text}, representing {strongest_hour_volume_share} "
-            "of the sample volume."
-        ),
-        opposite_interpretation,
-        (
-            f"- The largest raw extra-impact observation was {bps(d(max_raw_impact['extra_impact_bps']))} bps on a "
-            f"{usd_precise(d(max_raw_impact['size_usd']))} swap. This is a dust/rounding artifact, so economic "
-            f"outlier review below applies a {usd(economic_min_size_usd, 0)} notional floor."
-        ),
+        "## Snapshot",
         "",
-        "## Fee-Adjusted Impact By Size",
+        f"- Window: {start} to {end}",
+        f"- Pool: `{pool.pool_address}` ({pool.token0.symbol}/{pool.token1.symbol}, fee tier {pool.fee}; fee rate {Decimal(pool.fee) / Decimal(10000):.2f}%)",
+        f"- Swaps with pre-price: {len(rows):,}",
+        f"- Quote-side volume: {money(volume)}",
+        f"- Median raw absolute impact: {num(median(raw_bps))} bps",
+        f"- Median extra slippage after fee: {num(median(extra_bps))} bps; p95 {num(percentile(extra_bps, Decimal(95)))} bps",
+        f"- Estimated fee-floor cost: {money(fee_cost)}; estimated extra slippage cost: {money(extra_cost)}",
+        f"- Full-window pool price move: {num(price_move_bps)} bps",
+        f"- Top 10% by size: {pct(total(top10, 'size_usd'), volume)} of volume and {pct(total(top10, 'extra_slippage_usd'), extra_cost)} of extra slippage cost",
+        f"- Same-tx opposite-direction target-pool candidates: {len(round_trips):,}",
+        f"- Backrun-like local candidates: {len(backruns):,}",
+        f"- Largest raw impact is {num(dec(max_raw['raw_abs_impact_bps']))} bps on a {money(dec(max_raw['size_usd']))} swap, so raw maxima need a notional floor.",
         "",
-        "| Size bucket | Swaps | Volume | Volume share | Median abs impact (bps) | Median extra bps | P75 extra bps | P95 extra bps |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        *bucket_lines(impact_rows, total_volume),
+        "## Fee-Adjusted Slippage By Size",
         "",
-        "## Volume Concentration",
+        *size_bucket_table(rows),
         "",
-        f"Estimated pool-fee cost is approximately {usd(total_fee_cost)}. Estimated extra slippage cost beyond the fee floor is approximately {usd(total_extra_cost)}.",
+        "## Concentration",
         "",
-        "| Segment by trade size | Swaps | Volume | Volume share | Extra slippage cost | Extra cost share |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
-        *concentration_lines(impact_rows, total_volume, total_extra_cost),
+        *concentration_table(rows),
         "",
-        "## Direction Asymmetry",
+        "## Peak Minutes",
         "",
-        f"Net buy-WETH quote volume was {usd(net_buy_volume)} (buy volume minus sell volume).",
+        *minute_table(rows),
         "",
-        "| Direction | Swaps | Volume | Volume share | Median size | Median extra bps | P95 extra bps |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-        *direction_lines(impact_rows, total_volume),
+        "## Peak Blocks",
         "",
-        "## Hourly Regimes",
+        *block_table(rows),
         "",
-        f"The strongest one-hour pool-price move was {strongest_hour_text}.",
+        "## Economic Outliers",
         "",
-        "| UTC hour | Swaps | Volume | Net buy-WETH volume | Price move (bps) | Median extra bps |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
-        *hourly,
+        f"Minimum notional: {money(args.economic_min_size_usd, 0)}.",
         "",
-        "## Large-Swap Follow-Through",
+        *economic_outlier_table(rows, args.economic_min_size_usd),
         "",
-        (
-            f"Top-decile swap threshold: {usd(p90_size)}. Window: {opposite_window_seconds} seconds. "
-            "Opposite-flow ratios compare cumulative opposite-direction volume after the anchor swap with the anchor swap size."
-        ),
+        "## Same-Tx Round Trips In The Target Pool",
         "",
-        "| Segment | Anchors | Any opposite flow | Opposite >=25% | Opposite >=50% | Opposite >=100% | Median opposite/anchor | Median first opposite seconds |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        flow_line("Top-decile size", top_flow),
-        flow_line("Lower 90% size", lower_flow),
+        "These are stronger candidates than simple five-minute reversals because the same transaction touches the target pool in both directions. They still need receipt/trace review to determine whether the transaction was arbitrage, routing, liquidation, or another bundled action.",
         "",
-        "## Price Recovery After Top-Decile Swaps",
+        *round_trip_table(rows),
         "",
-        (
-            f"Within {recovery_window_seconds} seconds, {top_recovery['recovered']:,}/{top_recovery['evaluated']:,} "
-            f"top-decile swaps saw the pool price return to within 25% of the anchor swap's pre/post price gap "
-            f"({recovery_rate}). Median recovery time: {top_recovery['median_seconds'] or 'n/a'} seconds."
-        ),
+        "## Backrun-Like Local Candidates",
         "",
-        "## Largest Fee-Adjusted Impact Transactions",
+        f"Rule: anchor notional >= {money(args.large_min_size_usd, 0)}, extra slippage >= {num(args.large_min_extra_bps)} bps, cumulative opposite-direction target-pool volume >= 25% of anchor notional within {args.backrun_blocks} blocks, and pool price recovers at least 50% of the anchor pre/post gap.",
         "",
-        f"These rows apply a {usd(economic_min_size_usd, 0)} minimum notional filter. Economic rows in scope: {len(economic_rows):,}.",
+        *backrun_table(rows, args.large_min_size_usd, args.large_min_extra_bps, args.backrun_blocks),
         "",
-        "| UTC time | Direction | Size | Extra bps | Abs impact bps | Post-price move bps | Tx |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
-        *outlier_lines(impact_rows, economic_min_size_usd),
+        "## Rules Worth Testing Further",
         "",
-        "## Largest Extra-Slippage Dollar Contributors",
-        "",
-        "| UTC time | Direction | Size | Extra bps | Estimated extra cost | Tx |",
-        "| --- | --- | ---: | ---: | ---: | --- |",
-        *cost_outlier_lines(impact_rows, economic_min_size_usd),
-        "",
-        "## Interpretation",
-        "",
-        "- Treat the 5 bps pool fee as the execution-cost floor. The research value is in the residual above that floor.",
-        "- Size is the clearer near-term driver than raw in-range liquidity in this short sample.",
-        "- Raw max-impact rankings must apply a notional floor; otherwise dust swaps dominate the outlier list.",
-        "- Simple reversal counts are too noisy for this high-frequency pool. Stronger candidates combine large notional, high extra slippage, material opposite flow, and rapid price recovery.",
-        "- The follow-through and recovery metrics identify candidates for manual transaction-level review; they do not prove arbitrage or MEV by themselves.",
+        "- Execution-risk rule: ignore raw bps below a notional floor; alert when a route would exceed the $10k-$50k region where extra slippage starts to appear in this sample.",
+        "- Liquidity-shock rule: alert on one-minute volume above $1M, net directional pressure above $250k, or minute-level pool-price movement above 50 bps.",
+        "- Backrun candidate rule: combine large notional, high fee-adjusted slippage, material opposite flow within one or two blocks, and fast price recovery.",
+        "- Higher-confidence MEV/arbitrage rule: inspect receipts for transactions that touch the target pool and another WETH/USDC fee tier in opposite directions in the same transaction.",
+        "- Negative rule: do not use 'any opposite swap within five minutes' as a signal here; the pool is active enough that this mostly measures background flow.",
         "",
     ]
-    output.write_text("\n".join(lines))
+    out.write_text("\n".join(lines))
 
 
 def main() -> None:
     args = build_parser().parse_args()
     conn = connect(args.db)
     pool = pool_tokens_from_row(load_pool_row(conn, args.pool))
-    raw_rows = load_swap_rows(conn, pool.pool_address)
-    if len(raw_rows) < 2:
-        raise SystemExit("Need at least two swaps. Run base-v3-fetch-swaps first.")
-    enriched = enrich_swaps(raw_rows, pool, args.base_symbol, args.quote_symbol)
-    impact_rows = valid_impact_rows(enriched, pool)
-    write_advanced_insights(
-        args.output,
-        pool,
-        enriched,
-        impact_rows,
-        args.opposite_window_seconds,
-        args.recovery_window_seconds,
-        args.economic_min_size_usd,
-    )
+    raw = load_swap_rows(conn, pool.pool_address)
+    enriched = enrich_swaps(raw, pool, args.base_symbol, args.quote_symbol)
+    rows = add_fee_adjusted_metrics(enriched, pool.fee)
+    if not rows:
+        raise SystemExit("No rows with pre-swap prices. Fetch a larger range first.")
+    write_report(args.output, pool, rows, args)
     print(f"Wrote {args.output}")
 
 
