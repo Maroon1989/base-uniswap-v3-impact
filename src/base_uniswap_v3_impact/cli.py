@@ -13,6 +13,8 @@ from .abis import ERC20_ABI, FACTORY_ABI, POOL_ABI, QUOTER_V2_ABI
 getcontext().prec = 80
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+DEFAULT_FACTORY = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+DEFAULT_QUOTER_V2 = "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
 BASE_TOKENS = {
     "WETH": "0x4200000000000000000000000000000000000006",
     "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -80,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Quote a Base Uniswap v3 exact-input swap and estimate price impact."
     )
     parser.add_argument("--rpc-url", default=os.getenv("BASE_RPC_URL"))
-    parser.add_argument("--factory", default=os.getenv("UNISWAP_V3_FACTORY"))
-    parser.add_argument("--quoter", default=os.getenv("UNISWAP_V3_QUOTER_V2"))
+    parser.add_argument("--factory", default=os.getenv("UNISWAP_V3_FACTORY", DEFAULT_FACTORY))
+    parser.add_argument("--quoter", default=os.getenv("UNISWAP_V3_QUOTER_V2", DEFAULT_QUOTER_V2))
     parser.add_argument("--token-in", required=True, help="Token address, or known symbol like WETH/USDC")
     parser.add_argument("--token-out", required=True, help="Token address, or known symbol like WETH/USDC")
     parser.add_argument("--fee", type=int, required=True, help="Pool fee tier, e.g. 500, 3000, 10000")

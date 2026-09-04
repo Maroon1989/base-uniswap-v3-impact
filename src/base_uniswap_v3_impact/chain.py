@@ -12,6 +12,16 @@ from .models import PoolInfo, Token
 T = TypeVar("T")
 
 
+def _safe_error_message(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", "unknown")
+        text = getattr(response, "text", "")
+        text = " ".join(str(text).split())[:500]
+        return f"{type(exc).__name__}: HTTP {status}. {text}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def retry_call(fn: Callable[[], T], attempts: int = 4, base_delay: float = 0.75) -> T:
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -19,11 +29,14 @@ def retry_call(fn: Callable[[], T], attempts: int = 4, base_delay: float = 0.75)
             return fn()
         except Exception as exc:  # web3 providers expose several backend-specific errors.
             last_error = exc
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) == 400:
+                break
             if attempt == attempts - 1:
                 break
             sleep(base_delay * (2**attempt))
     assert last_error is not None
-    raise last_error
+    raise RuntimeError(_safe_error_message(last_error)) from None
 
 
 class ChainClient:
@@ -111,11 +124,25 @@ class ChainClient:
         }
         return list(retry_call(lambda: self.w3.eth.get_logs(params)))
 
-    def count_logs(self, pool_address: str, topic0: str, from_block: int, to_block: int, chunk_size: int) -> int:
+    def count_logs(
+        self,
+        pool_address: str,
+        topic0: str,
+        from_block: int,
+        to_block: int,
+        chunk_size: int,
+        min_chunk_size: int = 10,
+    ) -> int:
         count = 0
         start = from_block
+        current_chunk_size = chunk_size
         while start <= to_block:
-            end = min(start + chunk_size - 1, to_block)
-            count += len(self.logs(pool_address, topic0, start, end))
-            start = end + 1
+            end = min(start + current_chunk_size - 1, to_block)
+            try:
+                count += len(self.logs(pool_address, topic0, start, end))
+                start = end + 1
+            except Exception:
+                if current_chunk_size <= min_chunk_size:
+                    raise
+                current_chunk_size = max(min_chunk_size, current_chunk_size // 2)
         return count

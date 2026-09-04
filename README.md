@@ -63,6 +63,8 @@ The fetcher supports:
 - resume progress by pool/range
 - SQLite de-duplication
 
+Alchemy's free Base tier currently limits address-filtered `eth_getLogs` calls to 10 blocks per request, so the default `LOG_CHUNK_SIZE` is set to `10`. Other RPC providers may allow larger chunks.
+
 ## Price Impact Methodology
 
 Uniswap v3 `Swap` emits the pool price after the swap. The analysis therefore approximates pre-swap price as the previous Swap event's post-swap price for the same pool.
@@ -130,7 +132,7 @@ base-v3-fetch-swaps
 Useful overrides:
 
 ```bash
-base-v3-fetch-swaps --fee 500 --days 7 --chunk-size 1000
+base-v3-fetch-swaps --fee 500 --days 7 --chunk-size 10
 base-v3-fetch-swaps --pool 0xYourPoolAddress --from-block 123 --to-block 456
 base-v3-fetch-swaps --max-swaps 20000
 ```

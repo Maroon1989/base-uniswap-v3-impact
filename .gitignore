@@ -14,6 +14,7 @@ data/*.db-*
 output/*.csv
 output/*.md
 output/charts/*.png
+output/**/*.png
 !data/.gitkeep
 !output/.gitkeep
 !output/charts/.gitkeep
