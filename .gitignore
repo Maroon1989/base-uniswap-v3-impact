@@ -16,6 +16,7 @@ output/smoke_*.md
 output/smoke_*.csv
 output/*.md
 !output/summary.md
+!output/advanced_insights.md
 output/**/*.png
 !output/charts/*.png
 output/smoke_charts/

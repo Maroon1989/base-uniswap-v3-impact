@@ -158,12 +158,19 @@ base-v3-quality-check
 base-v3-analyze
 ```
 
+5. Generate fee-adjusted and flow-based advanced findings:
+
+```bash
+base-v3-advanced-insights
+```
+
 Outputs:
 
 - `data/swaps.db` local SQLite database, ignored by git
 - quality-check console report
 - `output/swaps_enriched.csv` local enriched CSV, ignored by git
 - `output/summary.md` tracked formal summary
+- `output/advanced_insights.md` tracked fee-adjusted and flow-based findings
 - `output/charts/price_timeseries.png`
 - `output/charts/hourly_volume.png`
 - `output/charts/size_vs_impact.png`
@@ -172,7 +179,7 @@ Outputs:
 
 ## Results and Charts
 
-Formal run results are saved in `output/summary.md` and the chart files under `output/charts/`.
+Formal run results are saved in `output/summary.md`, deeper findings are saved in `output/advanced_insights.md`, and charts are under `output/charts/`.
 
 Dataset quality checks passed for the formal window:
 
@@ -198,15 +205,17 @@ Dataset quality checks passed for the formal window:
 
 ## Findings
 
-During the selected 4-hour window, the WETH/USDC 0.05% pool processed 4,677 swaps with about $9.12M of quote-side volume. The median swap size was only $321.56, which shows that most flow in this sample was small, frequent activity rather than a handful of very large trades.
+The more useful framing is fee-adjusted. In a 0.05% pool, the first roughly 5 bps of absolute execution impact is the pool fee. The sample median absolute impact was 5.099 bps, but median extra slippage after subtracting the fee floor was only 0.099 bps; p95 was 1.630 bps. This means normal WETH/USDC flow on Base was very efficient during this window.
 
-Absolute price impact was low for the majority of swaps: mean impact was 5.803 bps, median impact was 5.099 bps, and the 95th percentile was 6.630 bps. The maximum observed impact was much larger at 625.000 bps, so tail events exist even when typical execution cost is small.
+The impact curve becomes economically visible at larger sizes. Extra slippage was 0.032 bps under $1k and 0.462 bps for $1k-$10k, then jumped to 3.767 bps at $10k-$50k, 15.559 bps at $50k-$100k, and 22.381 bps at $100k-$250k. That suggests a practical execution threshold around the $10k-$50k bucket for this sample.
 
-Trade size is where the pattern becomes more informative. Median absolute impact was 5.032 bps below $1k, 5.462 bps for $1k-$10k, 8.767 bps for $10k-$50k, 20.559 bps for $50k-$100k, and 27.381 bps for $100k-$250k. In this sample, price impact starts to rise visibly once swaps reach roughly the $10k-$50k bucket.
+The economics are concentrated in the tail. The top 10% of swaps produced 74.3% of volume and 98.7% of estimated extra slippage cost; the top 1% alone produced 36.7% of volume and 84.0% of extra cost. Total estimated extra slippage beyond the fee floor was $6,650.90, exceeding estimated pool fees of $4,559.20. So monitoring just the largest flow would capture nearly all of the economically relevant slippage.
 
-Raw in-range liquidity did not explain much variation in this 4-hour sample. For trades above the median size, low-liquidity periods had median impact of 5.292 bps versus 5.440 bps in high-liquidity periods. That suggests size was a clearer driver than the raw liquidity field in this short window.
+The clearest market regime happened during 12:00-12:59 UTC on 2026-09-04: 2,207 swaps, $6.95M volume, 76.2% of the sample volume, net sell-WETH flow of about $702k, and a -280.989 bps pool-price move. Over the full four-hour window, the pool price moved -293.369 bps, far larger than the 0.099 bps median fee-adjusted single-swap impact.
 
-All top-decile size swaps were followed by an opposite-direction swap within five minutes. This is a useful candidate signal for arbitrage or MEV review, but it is not proof on its own; Base WETH/USDC is active enough that opposite-direction flow can also appear naturally.
+The prior reversal observation should be treated as a negative finding. Opposite-direction flow within five minutes was almost universal for both large and small anchors; top-decile swaps saw 97.9% material opposite flow, while the lower 90% saw 99.6%. In this pool, a simple opposite-swap rule is background activity, not a standalone arbitrage/MEV signal. A better alert would require a notional floor, high fee-adjusted slippage, and rapid price recovery.
+
+The raw maximum impact was also not an economic outlier: the largest extra-impact observation was 620.000 bps on a $0.000017 swap. That is a dust/rounding artifact. The economic outlier table in `output/advanced_insights.md` applies a $1,000 minimum notional filter; the largest real examples are clustered around 12:30-12:32 UTC and are mostly sell-WETH swaps above $100k.
 
 ## Potential Applications
 

@@ -16,24 +16,26 @@ This pool is a high-frequency venue for ETH-dollar flow on Base. Swap events exp
 
 - Total approximate volume: $9,118,397.54
 - Median trade size: $321.56
+- Pool fee floor: 5.000 bps
 - Mean absolute price impact: 5.803 bps
 - Median absolute price impact: 5.099 bps
-- 95th percentile absolute price impact: 6.630 bps
-- Max absolute price impact: 625.000 bps
+- Median fee-adjusted extra slippage: 0.099 bps
+- 95th percentile fee-adjusted extra slippage: 1.630 bps
+- Max raw absolute price impact: 625.000 bps; raw maxima can be dust artifacts, so use a notional floor for outlier review
 - Buy-WETH swaps: 2,457; sell-WETH swaps: 2,220
-- Impact starts to look meaningfully elevated around size bucket: <1k
-- Liquidity relationship: For trades above the median size, low-liquidity periods had median impact 5.292 bps versus 5.440 bps in high-liquidity periods (0.97x).
-- Short-horizon reversal signal: Among top-decile size swaps, 468/468 were followed by an opposite-direction swap within five minutes. This is a signal only, not proof of arbitrage or MEV.
+- Fee-adjusted impact starts to look meaningfully elevated around size bucket: 10k-50k
+- Liquidity relationship: For trades above the median size, low-liquidity periods had median extra slippage 0.292 bps versus 0.440 bps in high-liquidity periods (0.66x).
+- Short-horizon reversal note: Simple any-opposite-swap checks are too noisy in this high-frequency pool. Run base-v3-advanced-insights for material opposite-flow, recovery, and notional-filtered outlier metrics.
 
 ## Price Impact By Size Bucket
 
-| Size bucket | Swaps | Median abs impact (bps) |
-| --- | ---: | ---: |
-| <1k | 3297 | 5.032 |
-| 1k-10k | 1235 | 5.462 |
-| 10k-50k | 113 | 8.767 |
-| 50k-100k | 24 | 20.559 |
-| 100k-250k | 7 | 27.381 |
+| Size bucket | Swaps | Median abs impact (bps) | Median extra bps |
+| --- | ---: | ---: | ---: |
+| <1k | 3297 | 5.032 | 0.032 |
+| 1k-10k | 1235 | 5.462 | 0.462 |
+| 10k-50k | 113 | 8.767 | 3.767 |
+| 50k-100k | 24 | 20.559 | 15.559 |
+| 100k-250k | 7 | 27.381 | 22.381 |
 
 ## Potential Applications
 

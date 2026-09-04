@@ -282,6 +282,8 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
     sizes = [r["size_usd"] for r in rows]  # type: ignore[list-item]
     impacts = [r["abs_price_impact_pct"] for r in valid]  # type: ignore[list-item]
     impact_bps = [impact * Decimal(100) for impact in impacts]
+    fee_bps = Decimal(pool.fee) / Decimal(100)
+    extra_impact_bps = [max(impact - fee_bps, Decimal(0)) for impact in impact_bps]
     total_volume = sum(sizes, Decimal(0))
     buys = [r for r in rows if r["direction"] == "buy_base"]
     sells = [r for r in rows if r["direction"] == "sell_base"]
@@ -293,9 +295,12 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
         bucket_impacts = [r["abs_price_impact_pct"] * Decimal(100) for r in valid if r["size_bucket"] == bucket]  # type: ignore[operator]
         if not bucket_impacts:
             continue
-        med = median(bucket_impacts)
-        bucket_lines.append(f"| {bucket} | {len(bucket_impacts)} | {fmt_decimal(med, 3)} |")
-        if noticeable_bucket is None and med >= Decimal("5"):
+        bucket_extra = [max(impact - fee_bps, Decimal(0)) for impact in bucket_impacts]
+        med_abs = median(bucket_impacts)
+        med_extra = median(bucket_extra)
+        p75_extra = percentile(bucket_extra, Decimal(75))
+        bucket_lines.append(f"| {bucket} | {len(bucket_impacts)} | {fmt_decimal(med_abs, 3)} | {fmt_decimal(med_extra, 3)} |")
+        if noticeable_bucket is None and (med_extra >= Decimal("1") or (p75_extra is not None and p75_extra >= Decimal("2"))):
             noticeable_bucket = bucket
 
     liquidity_note = "Not enough observations to compare liquidity regimes."
@@ -306,38 +311,21 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
         if len(liquidities) >= 4:
             q25 = percentile(liquidities, Decimal(25))
             q75 = percentile(liquidities, Decimal(75))
-            low = [r["abs_price_impact_pct"] * Decimal(100) for r in large_enough if r["liquidity"] <= q25]  # type: ignore[operator]
-            high = [r["abs_price_impact_pct"] * Decimal(100) for r in large_enough if r["liquidity"] >= q75]  # type: ignore[operator]
+            low = [max(r["abs_price_impact_pct"] * Decimal(100) - fee_bps, Decimal(0)) for r in large_enough if r["liquidity"] <= q25]  # type: ignore[operator]
+            high = [max(r["abs_price_impact_pct"] * Decimal(100) - fee_bps, Decimal(0)) for r in large_enough if r["liquidity"] >= q75]  # type: ignore[operator]
             if low and high:
                 ratio = median(low) / median(high) if median(high) else None
                 liquidity_note = (
-                    f"For trades above the median size, low-liquidity periods had median impact "
+                    f"For trades above the median size, low-liquidity periods had median extra slippage "
                     f"{fmt_decimal(median(low), 3)} bps versus {fmt_decimal(median(high), 3)} bps "
                     f"in high-liquidity periods"
                     + (f" ({fmt_decimal(ratio, 2)}x)." if ratio else ".")
                 )
 
-    reversal_note = "Not enough swaps to evaluate short-horizon reversals."
-    if len(valid) >= 10:
-        p90_size = percentile(sizes, Decimal(90))
-        large = [r for r in rows if p90_size is not None and r["size_usd"] >= p90_size]
-        reversals = 0
-        for idx, row in enumerate(rows):
-            if row not in large:
-                continue
-            row_ts = int(row["block_timestamp"])
-            row_dir = row["direction"]
-            for nxt in rows[idx + 1 :]:
-                dt = int(nxt["block_timestamp"]) - row_ts
-                if dt > 300:
-                    break
-                if nxt["direction"] != row_dir:
-                    reversals += 1
-                    break
-        reversal_note = (
-            f"Among top-decile size swaps, {reversals}/{len(large)} were followed by an opposite-direction "
-            "swap within five minutes. This is a signal only, not proof of arbitrage or MEV."
-        )
+    reversal_note = (
+        "Simple any-opposite-swap checks are too noisy in this high-frequency pool. "
+        "Run base-v3-advanced-insights for material opposite-flow, recovery, and notional-filtered outlier metrics."
+    )
 
     start_dt = datetime.fromtimestamp(int(rows[0]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
     end_dt = datetime.fromtimestamp(int(rows[-1]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
@@ -360,20 +348,22 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
         "",
         f"- Total approximate volume: ${fmt_decimal(total_volume, 2)}",
         f"- Median trade size: ${fmt_decimal(median(sizes), 2) if sizes else 'n/a'}",
+        f"- Pool fee floor: {fmt_decimal(fee_bps, 3)} bps",
         f"- Mean absolute price impact: {fmt_decimal(Decimal(mean(impact_bps)), 3) if impact_bps else 'n/a'} bps",
         f"- Median absolute price impact: {fmt_decimal(median(impact_bps), 3) if impact_bps else 'n/a'} bps",
-        f"- 95th percentile absolute price impact: {fmt_decimal(percentile(impact_bps, Decimal(95)), 3)} bps",
-        f"- Max absolute price impact: {fmt_decimal(max(impact_bps), 3) if impact_bps else 'n/a'} bps",
+        f"- Median fee-adjusted extra slippage: {fmt_decimal(median(extra_impact_bps), 3) if extra_impact_bps else 'n/a'} bps",
+        f"- 95th percentile fee-adjusted extra slippage: {fmt_decimal(percentile(extra_impact_bps, Decimal(95)), 3)} bps",
+        f"- Max raw absolute price impact: {fmt_decimal(max(impact_bps), 3) if impact_bps else 'n/a'} bps; raw maxima can be dust artifacts, so use a notional floor for outlier review",
         f"- Buy-WETH swaps: {len(buys):,}; sell-WETH swaps: {len(sells):,}",
-        f"- Impact starts to look meaningfully elevated around size bucket: {noticeable_bucket or 'not clear in this sample'}",
+        f"- Fee-adjusted impact starts to look meaningfully elevated around size bucket: {noticeable_bucket or 'not clear in this sample'}",
         f"- Liquidity relationship: {liquidity_note}",
-        f"- Short-horizon reversal signal: {reversal_note}",
+        f"- Short-horizon reversal note: {reversal_note}",
         "",
         "## Price Impact By Size Bucket",
         "",
-        "| Size bucket | Swaps | Median abs impact (bps) |",
-        "| --- | ---: | ---: |",
-        *(bucket_lines or ["| n/a | 0 | n/a |"]),
+        "| Size bucket | Swaps | Median abs impact (bps) | Median extra bps |",
+        "| --- | ---: | ---: | ---: |",
+        *(bucket_lines or ["| n/a | 0 | n/a | n/a |"]),
         "",
         "## Potential Applications",
         "",
@@ -392,7 +382,6 @@ def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, objec
         "",
     ]
     output.write_text("\n".join(lines))
-
 
 def main() -> None:
     args = build_parser().parse_args()
