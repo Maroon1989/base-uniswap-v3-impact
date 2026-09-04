@@ -12,9 +12,13 @@ build/
 data/*.db
 data/*.db-*
 output/*.csv
+output/smoke_*.md
+output/smoke_*.csv
 output/*.md
-output/charts/*.png
+!output/summary.md
 output/**/*.png
+!output/charts/*.png
+output/smoke_charts/
 !data/.gitkeep
 !output/.gitkeep
 !output/charts/.gitkeep

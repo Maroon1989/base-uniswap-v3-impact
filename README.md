@@ -18,14 +18,23 @@ The project is intentionally scoped to one active pool so the methodology is aud
 
 ## Dataset and Pool Selection
 
-Default scope:
+Formal analysis scope used for this submission:
 
 - Network: Base mainnet
 - Protocol: Uniswap v3
+- Pool: `0xd0b53D9277642d899DF5C87A3966A349A798F224`
 - Pair: WETH/USDC
-- Default fee tier: `500` (0.05%)
-- Default lookback: recent 7 days
-- Storage: SQLite at `data/swaps.db`
+- Fee tier: `500` (0.05%)
+- Block range: `50861527` to `50868726`
+- UTC window: `2026-09-04 09:00:00` to `2026-09-04 12:59:59`
+- Beijing time window: `2026-09-04 17:00:00` to `2026-09-04 20:59:59`
+- Storage: SQLite at `data/swaps.db` locally; generated summary/charts are included in this repo
+
+Default configurable scope:
+
+- Pair: WETH/USDC
+- Fee tier: `500` (0.05%)
+- Lookback: recent 7 days, if your RPC can support the request volume
 
 Uniswap v3 has separate pools per fee tier, so the project includes a pool discovery command before collection:
 
@@ -63,7 +72,7 @@ The fetcher supports:
 - resume progress by pool/range
 - SQLite de-duplication
 
-Alchemy's free Base tier currently limits address-filtered `eth_getLogs` calls to 10 blocks per request, so the default `LOG_CHUNK_SIZE` is set to `10`. Other RPC providers may allow larger chunks.
+Alchemy's free Base tier currently limits address-filtered `eth_getLogs` calls to 10 blocks per request, so the default `LOG_CHUNK_SIZE` is set to `10`. The fetcher can run several 10-block requests in parallel with `--workers`; keep this modest on free RPC tiers.
 
 ## Price Impact Methodology
 
@@ -132,7 +141,7 @@ base-v3-fetch-swaps
 Useful overrides:
 
 ```bash
-base-v3-fetch-swaps --fee 500 --days 7 --chunk-size 10
+base-v3-fetch-swaps --fee 500 --days 7 --chunk-size 10 --workers 4 --progress-every 50
 base-v3-fetch-swaps --pool 0xYourPoolAddress --from-block 123 --to-block 456
 base-v3-fetch-swaps --max-swaps 20000
 ```
@@ -151,10 +160,10 @@ base-v3-analyze
 
 Outputs:
 
-- `data/swaps.db`
+- `data/swaps.db` local SQLite database, ignored by git
 - quality-check console report
-- `output/swaps_enriched.csv`
-- `output/summary.md`
+- `output/swaps_enriched.csv` local enriched CSV, ignored by git
+- `output/summary.md` tracked formal summary
 - `output/charts/price_timeseries.png`
 - `output/charts/hourly_volume.png`
 - `output/charts/size_vs_impact.png`
@@ -163,19 +172,41 @@ Outputs:
 
 ## Results and Charts
 
-After running `base-v3-analyze`, read `output/summary.md`. It includes:
+Formal run results are saved in `output/summary.md` and the chart files under `output/charts/`.
 
-- swap count and sampled time range
-- total approximate volume
-- average, median, 95th percentile, and maximum absolute price impact
-- buy-vs-sell counts
-- median impact by trade-size bucket
-- liquidity-regime comparison
-- short-horizon opposite-direction swap signal after top-decile trades
+Dataset quality checks passed for the formal window:
+
+- Raw swaps: 4,677
+- Analyzable swaps: 4,677
+- Swaps with pre-swap price impact: 4,676
+- Duplicate `tx_hash + log_index` rows: 0
+- Missing timestamps: 0
+- Zero amount rows: 0
+- Same-sign `amount0/amount1` rows: 0
+- Direction counts: 2,457 buy-WETH swaps and 2,220 sell-WETH swaps
+- Post-swap price range: 2,445.657252 to 2,545.677513 USDC/WETH
+
+![Pool price over time](output/charts/price_timeseries.png)
+
+![Hourly volume](output/charts/hourly_volume.png)
+
+![Trade size vs impact](output/charts/size_vs_impact.png)
+
+![Impact by size bucket](output/charts/impact_by_size_bucket.png)
+
+![Liquidity vs impact](output/charts/liquidity_vs_impact.png)
 
 ## Findings
 
-The final findings are generated from the local dataset, not hard-coded. This keeps the README reproducible even if the collection window changes. Copy or summarize `output/summary.md` into this section for the final submission after you fetch data with your RPC.
+During the selected 4-hour window, the WETH/USDC 0.05% pool processed 4,677 swaps with about $9.12M of quote-side volume. The median swap size was only $321.56, which shows that most flow in this sample was small, frequent activity rather than a handful of very large trades.
+
+Absolute price impact was low for the majority of swaps: mean impact was 5.803 bps, median impact was 5.099 bps, and the 95th percentile was 6.630 bps. The maximum observed impact was much larger at 625.000 bps, so tail events exist even when typical execution cost is small.
+
+Trade size is where the pattern becomes more informative. Median absolute impact was 5.032 bps below $1k, 5.462 bps for $1k-$10k, 8.767 bps for $10k-$50k, 20.559 bps for $50k-$100k, and 27.381 bps for $100k-$250k. In this sample, price impact starts to rise visibly once swaps reach roughly the $10k-$50k bucket.
+
+Raw in-range liquidity did not explain much variation in this 4-hour sample. For trades above the median size, low-liquidity periods had median impact of 5.292 bps versus 5.440 bps in high-liquidity periods. That suggests size was a clearer driver than the raw liquidity field in this short window.
+
+All top-decile size swaps were followed by an opposite-direction swap within five minutes. This is a useful candidate signal for arbitrage or MEV review, but it is not proof on its own; Base WETH/USDC is active enough that opposite-direction flow can also appear naturally.
 
 ## Potential Applications
 

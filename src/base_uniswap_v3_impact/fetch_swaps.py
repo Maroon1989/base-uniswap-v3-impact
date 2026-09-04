@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from .chain import ChainClient
@@ -23,7 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to-block", type=int)
     parser.add_argument("--days", type=int, default=cfg.lookback_days)
     parser.add_argument("--chunk-size", type=int, default=cfg.log_chunk_size)
-    parser.add_argument("--min-chunk-size", type=int, default=50)
+    parser.add_argument("--min-chunk-size", type=int, default=10)
+    parser.add_argument("--workers", type=int, default=4, help="Parallel eth_getLogs requests. Keep modest on free RPC tiers.")
+    parser.add_argument("--progress-every", type=int, default=1, help="Print one progress line every N chunks.")
     parser.add_argument("--max-swaps", type=int, help="Stop after reading this many logs from the selected range.")
     parser.add_argument("--no-resume", action="store_true", help="Ignore saved fetch progress for this pool/range.")
     return parser
@@ -70,44 +73,75 @@ def main() -> None:
     print(f"Database: {args.db}")
 
     chunk_size = args.chunk_size
+    workers = max(1, args.workers)
     total_seen = 0
     total_inserted = 0
+    chunks_completed = 0
     start = next_block
     while start <= to_block:
-        end = min(start + chunk_size - 1, to_block)
+        wave_start = start
+        ranges: list[tuple[int, int]] = []
+        for _ in range(workers):
+            if start > to_block:
+                break
+            end = min(start + chunk_size - 1, to_block)
+            ranges.append((start, end))
+            start = end + 1
+
         try:
-            raw_logs = client.logs(pool.address, SWAP_EVENT_TOPIC, start, end)
+            if workers == 1:
+                raw_by_range = {ranges[0]: client.logs(pool.address, SWAP_EVENT_TOPIC, ranges[0][0], ranges[0][1])}
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {
+                        executor.submit(client.logs, pool.address, SWAP_EVENT_TOPIC, begin, end): (begin, end)
+                        for begin, end in ranges
+                    }
+                    raw_by_range = {futures[future]: future.result() for future in as_completed(futures)}
         except Exception as exc:
+            start = wave_start
             if chunk_size > args.min_chunk_size:
                 chunk_size = max(args.min_chunk_size, chunk_size // 2)
-                print(f"RPC rejected/failed chunk {start}-{end}; reducing chunk size to {chunk_size}. Error: {exc}")
+                print(f"RPC rejected/failed chunk near {wave_start}; reducing chunk size to {chunk_size}. Error: {exc}")
+                continue
+            if workers > 1:
+                workers = max(1, workers // 2)
+                print(f"RPC rejected/failed parallel wave near {wave_start}; reducing workers to {workers}. Error: {exc}")
                 continue
             raise
 
-        decoded = [decode_swap_log(log) for log in raw_logs]
-        timestamps: dict[int, int] = {}
-        for swap in decoded:
-            ts = client.block_timestamp(swap.block_number)
-            timestamps[swap.block_number] = ts
-            insert_block_timestamp(conn, swap.block_number, ts)
+        decoded_by_range = {range_: [decode_swap_log(log) for log in raw_by_range[range_]] for range_ in ranges}
+        all_decoded = [swap for range_ in ranges for swap in decoded_by_range[range_]]
+        timestamps = client.block_timestamps(swap.block_number for swap in all_decoded)
+        for block_number, ts in timestamps.items():
+            insert_block_timestamp(conn, block_number, ts)
 
-        inserted = insert_swaps(conn, decoded, timestamps)
-        total_seen += len(decoded)
-        total_inserted += inserted
-        save_progress(conn, pid, pool.address, from_block, to_block, end + 1, chunk_size)
+        for begin, end in ranges:
+            decoded = decoded_by_range[(begin, end)]
+            inserted = insert_swaps(conn, decoded, timestamps)
+            total_seen += len(decoded)
+            total_inserted += inserted
+            save_progress(conn, pid, pool.address, from_block, to_block, end + 1, chunk_size)
 
-        if decoded:
-            first_ts = datetime.fromtimestamp(min(timestamps.values()), tz=timezone.utc).isoformat()
-            last_ts = datetime.fromtimestamp(max(timestamps.values()), tz=timezone.utc).isoformat()
-            ts_text = f", {first_ts} to {last_ts}"
-        else:
-            ts_text = ""
-        print(f"{start}-{end}: logs={len(decoded)}, inserted={inserted}{ts_text}")
+            chunks_completed += 1
+            should_print = chunks_completed % max(1, args.progress_every) == 0 or end >= to_block
+            if should_print:
+                if decoded:
+                    chunk_timestamps = [timestamps[swap.block_number] for swap in decoded]
+                    first_ts = datetime.fromtimestamp(min(chunk_timestamps), tz=timezone.utc).isoformat()
+                    last_ts = datetime.fromtimestamp(max(chunk_timestamps), tz=timezone.utc).isoformat()
+                    ts_text = f", {first_ts} to {last_ts}"
+                else:
+                    ts_text = ""
+                print(
+                    f"{begin}-{end}: logs={len(decoded)}, inserted={inserted}, "
+                    f"total_seen={total_seen}, total_inserted={total_inserted}{ts_text}"
+                )
 
-        if args.max_swaps and total_seen >= args.max_swaps:
-            print(f"Reached --max-swaps={args.max_swaps}; stopping early.")
-            break
-        start = end + 1
+            if args.max_swaps and total_seen >= args.max_swaps:
+                print(f"Reached --max-swaps={args.max_swaps}; stopping early.")
+                print(f"Done. logs_seen={total_seen}, newly_inserted={total_inserted}")
+                return
 
     print(f"Done. logs_seen={total_seen}, newly_inserted={total_inserted}")
 

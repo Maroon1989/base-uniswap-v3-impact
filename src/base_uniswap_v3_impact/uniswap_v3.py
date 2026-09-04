@@ -54,6 +54,14 @@ def _unsigned(word_hex: str) -> int:
     return int(word_hex, 16)
 
 
+def _to_int(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value, 16) if value.startswith("0x") else int(value)
+    return int(value)
+
+
 def decode_swap_log(log: Any) -> DecodedSwap:
     data = _hex(log["data"])[2:]
     words = [data[i : i + 64] for i in range(0, len(data), 64)]
@@ -62,10 +70,10 @@ def decode_swap_log(log: Any) -> DecodedSwap:
     topics = log["topics"]
     return DecodedSwap(
         pool_address=log["address"],
-        block_number=int(log["blockNumber"]),
+        block_number=_to_int(log["blockNumber"]),
         transaction_hash=_hex(log["transactionHash"]),
-        transaction_index=int(log.get("transactionIndex", 0)),
-        log_index=int(log["logIndex"]),
+        transaction_index=_to_int(log.get("transactionIndex", 0)),
+        log_index=_to_int(log["logIndex"]),
         sender=_address_from_topic(topics[1]),
         recipient=_address_from_topic(topics[2]),
         amount0=_signed_256(words[0]),

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from time import sleep
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
+
+import requests
 
 from web3 import Web3
 
@@ -41,6 +43,7 @@ def retry_call(fn: Callable[[], T], attempts: int = 4, base_delay: float = 0.75)
 
 class ChainClient:
     def __init__(self, rpc_url: str):
+        self.rpc_url = rpc_url
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
         if not self.w3.is_connected():
             raise SystemExit("Could not connect to Base RPC.")
@@ -104,6 +107,34 @@ class ChainClient:
         self._block_ts_cache[block_number] = timestamp
         return timestamp
 
+    def block_timestamps(self, block_numbers: Iterable[int]) -> dict[int, int]:
+        unique_blocks = sorted(set(int(block_number) for block_number in block_numbers))
+        missing = [block_number for block_number in unique_blocks if block_number not in self._block_ts_cache]
+        if missing:
+            payload = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": block_number,
+                    "method": "eth_getBlockByNumber",
+                    "params": [hex(block_number), False],
+                }
+                for block_number in missing
+            ]
+            try:
+                response = requests.post(self.rpc_url, json=payload, timeout=30)
+                response.raise_for_status()
+                results = response.json()
+                by_id = {int(item["id"]): item for item in results}
+                for block_number in missing:
+                    item = by_id.get(block_number)
+                    if not item or item.get("error"):
+                        raise RuntimeError(f"Batch block timestamp request failed for block {block_number}: {item}")
+                    self._block_ts_cache[block_number] = int(item["result"]["timestamp"], 16)
+            except Exception:
+                for block_number in missing:
+                    self.block_timestamp(block_number)
+        return {block_number: self._block_ts_cache[block_number] for block_number in unique_blocks}
+
     def find_block_at_or_after_timestamp(self, target_timestamp: int, low: int = 0, high: int | None = None) -> int:
         if high is None:
             high = self.latest_block_number()
@@ -115,14 +146,23 @@ class ChainClient:
                 high = mid
         return low
 
+    def rpc_request(self, method: str, params: list[Any]) -> Any:
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        response = requests.post(self.rpc_url, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("error"):
+            raise RuntimeError(data["error"])
+        return data["result"]
+
     def logs(self, pool_address: str, topic0: str, from_block: int, to_block: int) -> list[Any]:
         params = {
             "address": self.checksum(pool_address),
-            "fromBlock": from_block,
-            "toBlock": to_block,
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
             "topics": [topic0],
         }
-        return list(retry_call(lambda: self.w3.eth.get_logs(params)))
+        return list(retry_call(lambda: self.rpc_request("eth_getLogs", [params])))
 
     def count_logs(
         self,
