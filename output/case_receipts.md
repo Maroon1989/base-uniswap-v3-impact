@@ -1,52 +1,62 @@
-# Transaction Receipt Swap Inspection
+# Case Notes
+
+These notes are manually written from `output/case_receipts.json` and the local target-pool Swap dataset. The purpose is to separate plain large swaps from more interesting cross-pool candidates.
 
 ## 0x611bd37d...2ecfd349
 
-- Block: 50867835
-- Status: 1
-- Gas used: 303,190
+This transaction is a clean large target-pool sell. The receipt contains one Uniswap v3 Swap log in the target WETH/USDC 0.05% pool:
 
-| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
-| ---: | --- | --- | ---: | --- | ---: | ---: |
-| 2504 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 72.60229143 | -179,740.85801200 |
+- sold 72.60229143 WETH
+- received 179,740.858012 USDC
+- block `50867835`
+- gas used `303,190`
+
+In the local metrics this was the largest economic outlier: estimated extra slippage of 35.040 bps, about $629.82. It is useful as an execution-risk anchor. It is not, by itself, evidence of arbitrage because the receipt does not show cross-pool routing.
 
 ## 0x1a2915ed...886dbaf7
 
-- Block: 50867834
-- Status: 1
-- Gas used: 264,998
+This is another clean large target-pool sell. The receipt contains one Uniswap v3 Swap log in the target WETH/USDC 0.05% pool:
 
-| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
-| ---: | --- | --- | ---: | --- | ---: | ---: |
-| 2637 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 57.74181688 | -143,597.94067500 |
+- sold 57.74181688 WETH
+- received 143,597.940675 USDC
+- block `50867834`
+- gas used `264,998`
+
+The estimated extra slippage was 27.882 bps, about $400.38. Like the previous case, this is best treated as a large-flow execution-risk event rather than an arbitrage case.
 
 ## 0x27573ac3...530ed72d
 
-- Block: 50867835
-- Status: 1
-- Gas used: 1,396,321
+This transaction is more interesting. The receipt shows five Uniswap v3 Swap logs. It sold WETH in a WETH/USDC 0.30% pool, bought WETH in the target WETH/USDC 0.05% pool, routed through SOL/cbBTC and JitoSOL/cbBTC, and then touched the target pool again in the opposite direction.
 
-| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
-| ---: | --- | --- | ---: | --- | ---: | ---: |
-| 2563 | 0x6c561B446416E1A00E8E93E221854d6eA4171372 | WETH/USDC | 3000 | sell_WETH | 37.76775779 | -93,944.04427900 |
-| 2564 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | buy_WETH | -37.83902586 | 93,944.04427900 |
-| 2571 | 0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31 | SOL/cbBTC | 300 |  | -3.50907493 | 0.00446677 |
-| 2573 | 0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871 | JitoSOL/cbBTC | 100 |  | 2.70036735 | -0.00446745 |
-| 2579 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 0.60491969 | -1,503.04503600 |
+Relevant logs:
+
+- WETH/USDC 0.30% pool: sold 37.76775779 WETH for 93,944.044279 USDC.
+- Target WETH/USDC 0.05% pool: bought 37.83902586 WETH for 93,944.044279 USDC.
+- Target WETH/USDC 0.05% pool again: sold 0.60491969 WETH for 1,503.045036 USDC.
+
+This looks like a cross-pool route or arbitrage candidate because it uses different WETH/USDC fee tiers in opposite directions inside the same transaction. It still needs full trace and balance accounting before making any profit claim.
 
 ## 0xc0998372...a231a369
 
-- Block: 50867837
-- Status: 1
-- Gas used: 4,336,389
+This is the richest case in the sample. The receipt contains eight Uniswap v3 Swap logs and uses multiple pools:
 
-| Log | Pool | Pair | Fee | Direction hint | Amount0 | Amount1 |
-| ---: | --- | --- | ---: | --- | ---: | ---: |
-| 171 | 0x6c561B446416E1A00E8E93E221854d6eA4171372 | WETH/USDC | 3000 | sell_WETH | 36.40144260 | -90,505.16419800 |
-| 172 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | buy_WETH | -36.46764196 | 90,505.16419800 |
-| 179 | 0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31 | SOL/cbBTC | 300 |  | -6.20060021 | 0.00787861 |
-| 181 | 0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871 | JitoSOL/cbBTC | 100 |  | 4.77158684 | -0.00788115 |
-| 188 | 0x7C7420DD105E2779316423Ba3E973f434315EFA9 | WETH/cbBTC | 85 |  | 7.92340905 | -0.24444876 |
-| 189 | 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef | USDC/cbBTC | 500 |  | -19,677.45426200 | 0.24444876 |
-| 196 | 0xd0b53D9277642d899DF5C87A3966A349A798F224 | WETH/USDC | 500 | sell_WETH | 8.24000034 | -20,457.35261200 |
-| 203 | 0xb4CB800910B228ED3d0834cF79D697127BBB00e5 | WETH/USDC | 100 | sell_WETH | 2.22383211 | -5,520.83881000 |
+- WETH/USDC 0.30%
+- target WETH/USDC 0.05%
+- SOL/cbBTC
+- JitoSOL/cbBTC
+- WETH/cbBTC
+- USDC/cbBTC
+- another WETH/USDC 0.01% pool
+
+The WETH/USDC legs are the key part:
+
+- WETH/USDC 0.30% pool: sold 36.40144260 WETH for 90,505.164198 USDC.
+- Target WETH/USDC 0.05% pool: bought 36.46764196 WETH for 90,505.164198 USDC.
+- Target WETH/USDC 0.05% pool later: sold 8.24000034 WETH for 20,457.352612 USDC.
+- WETH/USDC 0.01% pool: sold 2.22383211 WETH for 5,520.838810 USDC.
+
+This is a stronger MEV/arbitrage candidate than a simple post-swap reversal because the same receipt shows cross-pool and cross-fee-tier behavior. The next check would be a full transaction trace: token balance changes, gas cost, router/caller identity, and whether the WETH/USDC price differences covered all fees.
+
+## Takeaway
+
+The large single-pool sells explain execution risk. The multi-pool same-transaction cases are the better candidates for arbitrage or MEV review. Keeping those categories separate makes the analysis much cleaner.

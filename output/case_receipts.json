@@ -1,0 +1,171 @@
+{
+  "transactions": [
+    {
+      "tx_hash": "0x611bd37d94438d25b4b486ab7e25aed6021dd3c297035d83428eb7fb2ecfd349",
+      "block_number": 50867835,
+      "status": 1,
+      "gas_used": 303190,
+      "uniswap_v3_swaps": [
+        {
+          "log_index": 2504,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "sell_WETH",
+          "amount0": "72.602291433156624504",
+          "amount1": "-179740.858012"
+        }
+      ]
+    },
+    {
+      "tx_hash": "0x1a2915ed3f1751449ff524e8af233cbf21670865fbeb125382dbc2ec886dbaf7",
+      "block_number": 50867834,
+      "status": 1,
+      "gas_used": 264998,
+      "uniswap_v3_swaps": [
+        {
+          "log_index": 2637,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "sell_WETH",
+          "amount0": "57.741816883143001667",
+          "amount1": "-143597.940675"
+        }
+      ]
+    },
+    {
+      "tx_hash": "0x27573ac300d3540d282c61e05b4ed075f2e4200f56dd616d01c7551a530ed72d",
+      "block_number": 50867835,
+      "status": 1,
+      "gas_used": 1396321,
+      "uniswap_v3_swaps": [
+        {
+          "log_index": 2563,
+          "pool_address": "0x6c561B446416E1A00E8E93E221854d6eA4171372",
+          "pair": "WETH/USDC",
+          "fee_tier": 3000,
+          "direction_hint": "sell_WETH",
+          "amount0": "37.767757793868484634",
+          "amount1": "-93944.044279"
+        },
+        {
+          "log_index": 2564,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "buy_WETH",
+          "amount0": "-37.839025855780008172",
+          "amount1": "93944.044279"
+        },
+        {
+          "log_index": 2571,
+          "pool_address": "0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31",
+          "pair": "SOL/cbBTC",
+          "fee_tier": 300,
+          "direction_hint": null,
+          "amount0": "-3.509074932",
+          "amount1": "0.00446677"
+        },
+        {
+          "log_index": 2573,
+          "pool_address": "0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871",
+          "pair": "JitoSOL/cbBTC",
+          "fee_tier": 100,
+          "direction_hint": null,
+          "amount0": "2.700367348",
+          "amount1": "-0.00446745"
+        },
+        {
+          "log_index": 2579,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "sell_WETH",
+          "amount0": "0.604919691970091775",
+          "amount1": "-1503.045036"
+        }
+      ]
+    },
+    {
+      "tx_hash": "0xc09983726af386ae9bb7e090d6671a66093bfb968737692c50367c01a231a369",
+      "block_number": 50867837,
+      "status": 1,
+      "gas_used": 4336389,
+      "uniswap_v3_swaps": [
+        {
+          "log_index": 171,
+          "pool_address": "0x6c561B446416E1A00E8E93E221854d6eA4171372",
+          "pair": "WETH/USDC",
+          "fee_tier": 3000,
+          "direction_hint": "sell_WETH",
+          "amount0": "36.401442596050080722",
+          "amount1": "-90505.164198"
+        },
+        {
+          "log_index": 172,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "buy_WETH",
+          "amount0": "-36.46764195548427769",
+          "amount1": "90505.164198"
+        },
+        {
+          "log_index": 179,
+          "pool_address": "0xCcfA472815563ff9eB2de95C7b2bE1Ccf91f7F31",
+          "pair": "SOL/cbBTC",
+          "fee_tier": 300,
+          "direction_hint": null,
+          "amount0": "-6.200600214",
+          "amount1": "0.00787861"
+        },
+        {
+          "log_index": 181,
+          "pool_address": "0xe2B8c33AE97658ceaD06AfD47c7F3857e5851871",
+          "pair": "JitoSOL/cbBTC",
+          "fee_tier": 100,
+          "direction_hint": null,
+          "amount0": "4.771586838",
+          "amount1": "-0.00788115"
+        },
+        {
+          "log_index": 188,
+          "pool_address": "0x7C7420DD105E2779316423Ba3E973f434315EFA9",
+          "pair": "WETH/cbBTC",
+          "fee_tier": 85,
+          "direction_hint": null,
+          "amount0": "7.923409054407343729",
+          "amount1": "-0.24444876"
+        },
+        {
+          "log_index": 189,
+          "pool_address": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+          "pair": "USDC/cbBTC",
+          "fee_tier": 500,
+          "direction_hint": null,
+          "amount0": "-19677.454262",
+          "amount1": "0.24444876"
+        },
+        {
+          "log_index": 196,
+          "pool_address": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+          "pair": "WETH/USDC",
+          "fee_tier": 500,
+          "direction_hint": "sell_WETH",
+          "amount0": "8.240000335903400214",
+          "amount1": "-20457.352612"
+        },
+        {
+          "log_index": 203,
+          "pool_address": "0xb4CB800910B228ED3d0834cF79D697127BBB00e5",
+          "pair": "WETH/USDC",
+          "fee_tier": 100,
+          "direction_hint": "sell_WETH",
+          "amount0": "2.22383210981802304",
+          "amount1": "-5520.83881"
+        }
+      ]
+    }
+  ]
+}

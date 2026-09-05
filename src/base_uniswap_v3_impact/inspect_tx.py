@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from web3 import Web3
 
@@ -14,7 +17,7 @@ from .uniswap_v3 import SWAP_EVENT_TOPIC, decimal_amount, decode_swap_log
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect Uniswap v3 Swap logs inside one or more Base transactions.")
     parser.add_argument("tx", nargs="*", help="Transaction hash to inspect. Can be passed multiple times.")
-    parser.add_argument("--output", help="Optional markdown output path.")
+    parser.add_argument("--output", help="Optional JSON output path.")
     return parser
 
 
@@ -23,12 +26,10 @@ def topic_hex(topic: object) -> str:
     return "0x" + value.removeprefix("0x")
 
 
-def short(tx_hash: str) -> str:
-    return f"{tx_hash[:10]}...{tx_hash[-8:]}"
-
-
-def row(cells: list[object]) -> str:
-    return "| " + " | ".join(str(cell) for cell in cells) + " |"
+def decimal_default(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def main() -> None:
@@ -65,57 +66,42 @@ def main() -> None:
         symbol1, decimals1 = token_meta(token1)
         return symbol0, decimals0, symbol1, decimals1, fee
 
-    lines = ["# Transaction Receipt Swap Inspection", ""]
+    inspected = []
     for tx_hash in args.tx:
         receipt = w3.eth.get_transaction_receipt(tx_hash)
-        lines.extend(
-            [
-                f"## {short(tx_hash)}",
-                "",
-                f"- Block: {receipt.blockNumber}",
-                f"- Status: {receipt.status}",
-                f"- Gas used: {receipt.gasUsed:,}",
-                "",
-                row(["Log", "Pool", "Pair", "Fee", "Direction hint", "Amount0", "Amount1"]),
-                row(["---:", "---", "---", "---:", "---", "---:", "---:"]),
-            ]
-        )
-        swap_count = 0
+        tx_info = {
+            "tx_hash": tx_hash,
+            "block_number": int(receipt.blockNumber),
+            "status": int(receipt.status),
+            "gas_used": int(receipt.gasUsed),
+            "uniswap_v3_swaps": [],
+        }
         for log in receipt.logs:
             if not log["topics"] or topic_hex(log["topics"][0]).lower() != SWAP_EVENT_TOPIC.lower():
                 continue
-            try:
-                swap = decode_swap_log(log)
-                symbol0, decimals0, symbol1, decimals1, fee = pool_meta(log["address"])
-            except Exception as exc:
-                lines.append(row([log.get("logIndex", "?"), log["address"], "decode failed", "", str(exc), "", ""]))
-                continue
+            swap = decode_swap_log(log)
+            symbol0, decimals0, symbol1, decimals1, fee = pool_meta(log["address"])
             amount0 = decimal_amount(swap.amount0, decimals0)
             amount1 = decimal_amount(swap.amount1, decimals1)
-            direction = ""
+            direction = None
             if symbol0 == "WETH" and symbol1 == "USDC":
                 direction = "sell_WETH" if amount0 > 0 else "buy_WETH"
             elif symbol1 == "WETH" and symbol0 == "USDC":
                 direction = "sell_WETH" if amount1 > 0 else "buy_WETH"
-            swap_count += 1
-            lines.append(
-                row(
-                    [
-                        swap.log_index,
-                        log["address"],
-                        f"{symbol0}/{symbol1}",
-                        fee,
-                        direction,
-                        f"{amount0:,.8f}",
-                        f"{amount1:,.8f}",
-                    ]
-                )
+            tx_info["uniswap_v3_swaps"].append(
+                {
+                    "log_index": swap.log_index,
+                    "pool_address": log["address"],
+                    "pair": f"{symbol0}/{symbol1}",
+                    "fee_tier": fee,
+                    "direction_hint": direction,
+                    "amount0": amount0,
+                    "amount1": amount1,
+                }
             )
-        if swap_count == 0:
-            lines.append(row(["n/a", "n/a", "No v3 Swap logs found", "", "", "", ""]))
-        lines.append("")
+        inspected.append(tx_info)
 
-    text = "\n".join(lines)
+    text = json.dumps({"transactions": inspected}, indent=2, default=decimal_default) + "\n"
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)

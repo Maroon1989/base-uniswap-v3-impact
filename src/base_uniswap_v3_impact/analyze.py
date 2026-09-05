@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext
 from pathlib import Path
-from statistics import mean, median
 
 from .models import Token
 from .config import DEFAULT_CHART_DIR, DEFAULT_DB_PATH
@@ -28,14 +27,13 @@ class PoolTokens:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze collected Base Uniswap v3 swaps and write charts/findings.")
+    parser = argparse.ArgumentParser(description="Analyze collected Base Uniswap v3 swaps and write CSV/charts.")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
     parser.add_argument("--pool")
     parser.add_argument("--base-symbol", default="WETH")
     parser.add_argument("--quote-symbol", default="USDC")
     parser.add_argument("--charts-dir", default=str(DEFAULT_CHART_DIR))
     parser.add_argument("--csv", default="output/swaps_enriched.csv")
-    parser.add_argument("--summary", default="output/summary.md")
     return parser
 
 
@@ -275,114 +273,6 @@ def write_charts(charts_dir: str | Path, rows: list[dict[str, object]]) -> list[
     return written
 
 
-def write_summary(path: str | Path, pool: PoolTokens, rows: list[dict[str, object]], chart_paths: list[Path]) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    valid = [r for r in rows if r["abs_price_impact_pct"] is not None]
-    sizes = [r["size_usd"] for r in rows]  # type: ignore[list-item]
-    impacts = [r["abs_price_impact_pct"] for r in valid]  # type: ignore[list-item]
-    impact_bps = [impact * Decimal(100) for impact in impacts]
-    fee_bps = Decimal(pool.fee) / Decimal(100)
-    extra_impact_bps = [max(impact - fee_bps, Decimal(0)) for impact in impact_bps]
-    total_volume = sum(sizes, Decimal(0))
-    buys = [r for r in rows if r["direction"] == "buy_base"]
-    sells = [r for r in rows if r["direction"] == "sell_base"]
-
-    bucket_order = ["<1k", "1k-10k", "10k-50k", "50k-100k", "100k-250k", "250k-500k", "500k-1m", ">=1m"]
-    bucket_lines = []
-    noticeable_bucket = None
-    for bucket in bucket_order:
-        bucket_impacts = [r["abs_price_impact_pct"] * Decimal(100) for r in valid if r["size_bucket"] == bucket]  # type: ignore[operator]
-        if not bucket_impacts:
-            continue
-        bucket_extra = [max(impact - fee_bps, Decimal(0)) for impact in bucket_impacts]
-        med_abs = median(bucket_impacts)
-        med_extra = median(bucket_extra)
-        p75_extra = percentile(bucket_extra, Decimal(75))
-        bucket_lines.append(f"| {bucket} | {len(bucket_impacts)} | {fmt_decimal(med_abs, 3)} | {fmt_decimal(med_extra, 3)} |")
-        if noticeable_bucket is None and (med_extra >= Decimal("1") or (p75_extra is not None and p75_extra >= Decimal("2"))):
-            noticeable_bucket = bucket
-
-    liquidity_note = "Not enough observations to compare liquidity regimes."
-    if len(valid) >= 10:
-        median_size = median(sizes)
-        large_enough = [r for r in valid if r["size_usd"] >= median_size]
-        liquidities = sorted(r["liquidity"] for r in large_enough)  # type: ignore[type-var]
-        if len(liquidities) >= 4:
-            q25 = percentile(liquidities, Decimal(25))
-            q75 = percentile(liquidities, Decimal(75))
-            low = [max(r["abs_price_impact_pct"] * Decimal(100) - fee_bps, Decimal(0)) for r in large_enough if r["liquidity"] <= q25]  # type: ignore[operator]
-            high = [max(r["abs_price_impact_pct"] * Decimal(100) - fee_bps, Decimal(0)) for r in large_enough if r["liquidity"] >= q75]  # type: ignore[operator]
-            if low and high:
-                ratio = median(low) / median(high) if median(high) else None
-                liquidity_note = (
-                    f"For trades above the median size, low-liquidity periods had median extra slippage "
-                    f"{fmt_decimal(median(low), 3)} bps versus {fmt_decimal(median(high), 3)} bps "
-                    f"in high-liquidity periods"
-                    + (f" ({fmt_decimal(ratio, 2)}x)." if ratio else ".")
-                )
-
-    reversal_note = (
-        "Simple any-opposite-swap checks are too noisy in this high-frequency pool. "
-        "Run base-v3-advanced-insights for material opposite-flow, recovery, and notional-filtered outlier metrics."
-    )
-
-    start_dt = datetime.fromtimestamp(int(rows[0]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
-    end_dt = datetime.fromtimestamp(int(rows[-1]["block_timestamp"]), tz=timezone.utc).isoformat() if rows else "n/a"
-    lines = [
-        "# Generated Metrics Snapshot",
-        "",
-        "## Dataset",
-        "",
-        f"- Network/protocol: Base / Uniswap v3",
-        f"- Pool: `{pool.pool_address}`",
-        f"- Pair: {pool.token0.symbol}/{pool.token1.symbol}, fee tier {pool.fee} ({pool.fee / 10000:.2f}%)",
-        f"- Time range: {start_dt} to {end_dt}",
-        f"- Swaps analyzed: {len(rows):,} ({len(valid):,} with pre-swap price impact)",
-        "",
-        "## Why This Dataset Is Interesting",
-        "",
-        "This pool is a high-frequency venue for ETH-dollar flow on Base. Swap events expose signed token deltas, after-swap price, liquidity and tick, which makes the dataset useful for studying execution cost, liquidity conditions, and short-horizon reversal patterns that can hint at arbitrage or MEV behavior.",
-        "",
-        "## What The Data Shows",
-        "",
-        f"- Total approximate volume: ${fmt_decimal(total_volume, 2)}",
-        f"- Median trade size: ${fmt_decimal(median(sizes), 2) if sizes else 'n/a'}",
-        f"- Pool fee floor: {fmt_decimal(fee_bps, 3)} bps",
-        f"- Mean absolute price impact: {fmt_decimal(Decimal(mean(impact_bps)), 3) if impact_bps else 'n/a'} bps",
-        f"- Median absolute price impact: {fmt_decimal(median(impact_bps), 3) if impact_bps else 'n/a'} bps",
-        f"- Approx. median fee-adjusted extra slippage: {fmt_decimal(median(extra_impact_bps), 3) if extra_impact_bps else 'n/a'} bps",
-        f"- Approx. 95th percentile fee-adjusted extra slippage: {fmt_decimal(percentile(extra_impact_bps, Decimal(95)), 3)} bps",
-        f"- Max raw absolute price impact: {fmt_decimal(max(impact_bps), 3) if impact_bps else 'n/a'} bps; raw maxima can be dust artifacts, so use a notional floor for outlier review",
-        f"- Buy-WETH swaps: {len(buys):,}; sell-WETH swaps: {len(sells):,}",
-        f"- Approx. fee-adjusted impact starts to look meaningfully elevated around size bucket: {noticeable_bucket or 'not clear in this sample'}",
-        f"- Liquidity relationship: {liquidity_note}",
-        f"- Short-horizon reversal note: {reversal_note}",
-        "",
-        "## Price Impact By Size Bucket",
-        "",
-        "| Size bucket | Swaps | Median abs impact (bps) | Median extra bps |",
-        "| --- | ---: | ---: | ---: |",
-        *(bucket_lines or ["| n/a | 0 | n/a | n/a |"]),
-        "",
-        "## Potential Applications",
-        "",
-        "- Execution risk: estimate where trade size begins to create non-trivial slippage on Base WETH/USDC.",
-        "- Alerting: flag unusually large swaps or low-liquidity windows before routing large orders.",
-        "- Arbitrage/MEV research: identify large impacts followed by rapid opposite-direction flow for manual investigation.",
-        "- Liquidity monitoring: track when raw in-range liquidity falls and execution quality worsens.",
-        "",
-        "## Limitations",
-        "",
-        "The pre-swap price is approximated with the previous Swap event's after-swap price, so quiet periods with Mint/Burn activity or external price moves can add noise. A single pool also cannot prove arbitrage or MEV; it can only surface candidate signals for deeper transaction-level review.",
-        "",
-        "## Charts",
-        "",
-        *[f"- `{chart}`" for chart in chart_paths],
-        "",
-    ]
-    output.write_text("\n".join(lines))
-
 def main() -> None:
     args = build_parser().parse_args()
     conn = connect(args.db)
@@ -397,9 +287,7 @@ def main() -> None:
 
     write_csv(args.csv, enriched)
     chart_paths = write_charts(args.charts_dir, enriched)
-    write_summary(args.summary, pool, enriched, chart_paths)
     print(f"Wrote {args.csv}")
-    print(f"Wrote {args.summary}")
     for chart in chart_paths:
         print(f"Wrote {chart}")
 
